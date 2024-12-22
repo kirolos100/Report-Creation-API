@@ -1,0 +1,156 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Arabic Report Generation API",
+    "description": "API for generating detailed Arabic reports based on user-provided data. The reports are generated using OpenAI's API and are returned in JSON format.",
+    "termsOfService": "http://swagger.io/terms/",
+    "contact": {
+      "email": "apiteam@swagger.io"
+    },
+    "license": {
+      "name": "Apache 2.0",
+      "url": "http://www.apache.org/licenses/LICENSE-2.0.html"
+    },
+    "version": "1.0.0"
+  },
+  "externalDocs": {
+    "description": "Find out more about this API",
+    "url": "http://swagger.io"
+  },
+  "servers": [
+    {
+      "url": "http://localhost:5000"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Generate Report",
+      "description": "API endpoint for generating Arabic reports"
+    }
+  ],
+  "paths": {
+    "/generate_report": {
+      "post": {
+        "tags": [
+          "Generate Report"
+        ],
+        "summary": "Generate a detailed Arabic report",
+        "description": "Generates a detailed Arabic report based on the provided inputs such as topic, perspective, target audience, key points, and optional sources.",
+        "operationId": "generateReport",
+        "requestBody": {
+          "description": "Input data in JSON format to generate the Arabic report",
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "موضوع_التقرير": {
+                    "type": "string",
+                    "description": "The main topic of the report"
+                  },
+                  "منظور_التقرير": {
+                    "type": "string",
+                    "description": "The perspective of the report"
+                  },
+                  "الجمهور_المستهدف": {
+                    "type": "string",
+                    "description": "The intended audience of the report"
+                  },
+                  "النقاط_والجوانب_الهامة": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Key points and aspects to be addressed in the report"
+                  },
+                  "إضافة_مصادر": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Optional sources to support the report"
+                  }
+                },
+                "required": [
+                  "موضوع_التقرير",
+                  "منظور_التقرير",
+                  "الجمهور_المستهدف",
+                  "النقاط_والجوانب_الهامة"
+                ]
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Report generated successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "report": {
+                      "type": "object",
+                      "description": "The generated report in JSON format"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Error occurred while generating the report"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+        "properties": {
+          "headings": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "integer",
+                  "description": "The version of the heading structure"
+                },
+                "title": {
+                  "type": "string",
+                  "description": "The title of the section"
+                },
+                "listItemsList": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "listItems": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "title": {
+                              "type": "string",
+                              "description": "The title of the point"
+                            },
+                            "content": {
+                              "type": "string",
+                              "description": "The content of the point, in HTML format"
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
