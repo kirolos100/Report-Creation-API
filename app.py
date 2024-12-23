@@ -39,7 +39,7 @@ swagger = Swagger(app, template={
         "description": "API for Automated Machine Learning tool",
         "version": "1.0.0"
     },
-    "host": "localhost:5000",  # Change to your host if needed
+    "host": "ndcreportcreationapi-fje6fhfcgehhfgdt.eastus-01.azurewebsites.net",  # Change to your host if needed
     "basePath": "/",  # Base path for API
 })
 
