@@ -20,7 +20,7 @@ jobs:
       - name: Set up Python version
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.9'
 
       - name: Create and start virtual environment
         run: |
@@ -66,4 +66,4 @@ jobs:
         with:
           app-name: 'NDCReportCreationAPI'
           slot-name: 'Production'
-          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_5C07DBA387FC49388B0A79C0D08EA936 }}
+          publish-profile: ${{ secrets.AZUREAPPSERVICE_PUBLISHPROFILE_D8FE761EE13B4C378AF587AB898E1EDC }}
