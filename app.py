@@ -60,7 +60,7 @@ def generate_arabic_report(
 
     arabic_prompt = f"""
     اكتب تقريرًا باللغة العربية يحمل عنوانا عن: "{موضوع_التقرير}". 
-    يجب أن يتم كتابة التقرير من منظور: {منظور_التقرير}. 
+    يجب أن يتم كتابة التقرير من منظور: {', '.join(منظور_التقرير)}. 
     الجمهور المستهدف للتقرير هم: {الجمهور_المستهدف}. 
     النقاط والجوانب الهامة التي يجب تناولها:
     {نقاط}
@@ -68,7 +68,7 @@ def generate_arabic_report(
     انا اريد json file مفصلا و وشارحا باستفاضة بدون ذكر المصدر في كل نقطة يحتوي على:
       headings: [
           version: 1,
-          title: عنوان فرعي,
+          title: عنوان فرعي لحميع النقاط,
           listItemsList: [
               listItems: [
                   title: عنوان النقطة,
@@ -76,7 +76,8 @@ def generate_arabic_report(
     المقال يجب ان يحتوي على اكثر من heading باكثر من عنوان فرعي و اكثر من النقطة
 لا تقوم بتغيير هذا ال Format الذي يبدا ب list of headings.
     لا تقوم بتغيير ترتيب ال format 
-    حيث ان ال version و الtitle يتم ذكرهم قبل الlistItemsList
+لاحظ اني اريد heading يحتوي على مجموعة titles و كل title له content مفصل 
+و انا اريد اكثر من heading    
     """
 
     conversation_history = [
