@@ -19,7 +19,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost:5000"
+      "url": "https://ndcreportcreationapi-fje6fhfcgehhfgdt.eastus-01.azurewebsites.net/"
     }
   ],
   "tags": [
