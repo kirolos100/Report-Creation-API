@@ -19,7 +19,7 @@
   },
   "servers": [
     {
-      "url": "https://ndcreportcreationapi-fje6fhfcgehhfgdt.eastus-01.azurewebsites.net/"
+      "url": "http://localhost:5000"
     }
   ],
   "tags": [
@@ -53,6 +53,8 @@
                     "items": {
                       "type": "string"
                     },
+                    "description": "The perspective of the report"
+                  },
                   "الجمهور_المستهدف": {
                     "type": "string",
                     "description": "The intended audience of the report"
