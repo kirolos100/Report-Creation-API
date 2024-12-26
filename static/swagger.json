@@ -49,9 +49,10 @@
                     "description": "The main topic of the report"
                   },
                   "منظور_التقرير": {
-                    "type": "string",
-                    "description": "The perspective of the report"
-                  },
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
                   "الجمهور_المستهدف": {
                     "type": "string",
                     "description": "The intended audience of the report"
