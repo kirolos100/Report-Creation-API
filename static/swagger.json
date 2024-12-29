@@ -44,29 +44,29 @@
               "schema": {
                 "type": "object",
                 "properties": {
-                  "موضوع_التقرير": {
+                  "Report_Topic": {
                     "type": "string",
                     "description": "The main topic of the report"
                   },
-                  "منظور_التقرير": {
+                  "Report_Perspective": {
                     "type": "array",
                     "items": {
                       "type": "string"
                     },
                     "description": "The perspective of the report"
                   },
-                  "الجمهور_المستهدف": {
+                  "Target_audience": {
                     "type": "string",
                     "description": "The intended audience of the report"
                   },
-                  "النقاط_والجوانب_الهامة": {
+                  "Important_points_and_aspects": {
                     "type": "array",
                     "items": {
                       "type": "string"
                     },
                     "description": "Key points and aspects to be addressed in the report"
                   },
-                  "إضافة_مصادر": {
+                  "Add_Resources": {
                     "type": "array",
                     "items": {
                       "type": "string"
@@ -75,10 +75,10 @@
                   }
                 },
                 "required": [
-                  "موضوع_التقرير",
-                  "منظور_التقرير",
-                  "الجمهور_المستهدف",
-                  "النقاط_والجوانب_الهامة"
+                  "Report_Topic",
+                  "Report_Perspective",
+                  "Target_audience",
+                  "Important_points_and_aspects"
                 ]
               }
             }
