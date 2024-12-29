@@ -129,17 +129,17 @@ def generate_arabic_report(
             "schema": {
                 "type": "object",
                 "properties": {
-                    "موضوع_التقرير": {"type": "string"},
-                    "منظور_التقرير": {
+                    "Report_Topic": {"type": "string"},
+                    "Report_Perspective": {
                         "type": "array",
                         "items": {"type": "string"}
                     },
-                    "الجمهور_المستهدف": {"type": "string"},
-                    "النقاط_والجوانب_الهامة": {
+                    "Target_audience": {"type": "string"},
+                    "Important_points_and_aspects": {
                         "type": "array",
                         "items": {"type": "string"}
                     },
-                    "إضافة_مصادر": {
+                    "Add_Resources": {
                         "type": "array",
                         "items": {"type": "string"}
                     }
@@ -168,11 +168,11 @@ def generate_report():
     """
     try:
         data = request.get_json()
-        موضوع_التقرير = data.get('موضوع_التقرير')
-        منظور_التقرير = data.get('منظور_التقرير', [])
-        الجمهور_المستهدف = data.get('الجمهور_المستهدف')
-        النقاط_والجوانب_الهامة = data.get('النقاط_والجوانب_الهامة', [])
-        إضافة_مصادر = data.get('إضافة_مصادر', [])
+        موضوع_التقرير = data.get('Report_Topic')
+        منظور_التقرير = data.get('Report_Perspective', [])
+        الجمهور_المستهدف = data.get('Target_audience')
+        النقاط_والجوانب_الهامة = data.get('Important_points_and_aspects', [])
+        إضافة_مصادر = data.get('Add_Resources', [])
 
         report = generate_arabic_report(
             موضوع_التقرير,
