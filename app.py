@@ -92,8 +92,8 @@ def generate_arabic_report(
     النقاط والجوانب الهامة التي يجب تناولها:
     {نقاط}
     
-    يرجى استخدام المعلومات التالية من المصادر الداعمة:
-    {المصادر}
+    يرجى تضمين إحصائيات وتحليلات مفصلة في كل نقطة، وشرح وافٍ بالمحتوى العلمي مع تقسيم المقال إلى أكثر من عنوان فرعي. استخدم البيانات التالية من المصادر لدعم المحتوى:
+    {المصادر}    
 انا اريد json file مفصلا و وشارحا باستفاضة بدون ذكر المصدر في كل نقطة يحتوي على:
       headings: [
           version: 1,
@@ -112,7 +112,7 @@ def generate_arabic_report(
     conversation_history = [
         {
             "role": "system",
-            "content": "You are a professional journalist tasked with writing a detailed informative and valuable Arabic article in detailed JSON format. Use the sources provided to enrich the content."
+            "content": "You are a professional journalist tasked with writing a detailed informative and valuable Arabic article in JSON format. The output should contain detailed statistics and analysis for every point."
         },
         {"role": "user", "content": arabic_prompt}
     ]
