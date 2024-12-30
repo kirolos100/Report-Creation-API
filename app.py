@@ -1,10 +1,11 @@
 from flask import Flask, request, jsonify
 import json
+import requests
+from bs4 import BeautifulSoup
 from openai import AzureOpenAI
 from flasgger import Swagger, swag_from
 from flask_swagger_ui import get_swaggerui_blueprint
 from flask_cors import CORS  # Import CORS
-
 
 # Initialize Azure OpenAI
 llm = AzureOpenAI(
@@ -15,33 +16,55 @@ llm = AzureOpenAI(
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)  # This will allow cross-origin requests to all routes
-
+CORS(app)  # Allow cross-origin requests
 
 # Swagger UI setup
-SWAGGER_URL = '/api/docs'  # URL for exposing Swagger UI (without trailing '/')
-API_URL = '/static/swagger.json'  # Our API url (can of course be a local resource)
+SWAGGER_URL = '/api/docs'
+API_URL = '/static/swagger.json'
 
 swaggerui_blueprint = get_swaggerui_blueprint(
-    SWAGGER_URL,  # Swagger UI static files will be mapped to '{SWAGGER_URL}/dist/'
+    SWAGGER_URL,
     API_URL,
-    config={  # Swagger UI config overrides
-        'app_name': "AutoML APIs"
-    }
+    config={'app_name': "AutoML APIs"}
 )
-
 app.register_blueprint(swaggerui_blueprint)
 
-# Swagger configuration
 swagger = Swagger(app, template={
     "info": {
         "title": "AutoML APIs",
         "description": "API for Automated Machine Learning tool",
         "version": "1.0.0"
     },
-    "host": "ndcreportcreationapi-fje6fhfcgehhfgdt.eastus-01.azurewebsites.net",  # Change to your host if needed
-    "basePath": "/",  # Base path for API
+    "host": "localhost:5000",
+    "basePath": "/",
 })
+
+# Helper function to fetch URLs from the external API
+def fetch_urls(موضوع_التقرير, منظور_التقرير):
+    try:
+        api_endpoint = "https://ndc-bing-search-hrhra6fkcuaffjby.canadacentral-01.azurewebsites.net/bing_search"
+        payload = {
+            "منظور_التقرير": منظور_التقرير,
+            "موضوع_التقرير": موضوع_التقرير
+        }
+        headers = {"accept": "application/json", "Content-Type": "application/json"}
+        response = requests.post(api_endpoint, json=payload, headers=headers)
+        response.raise_for_status()
+        return response.json().get("URLs", [])
+    except Exception as e:
+        print(f"Error fetching URLs: {e}")
+        return []
+
+# Function to fetch content from a URL
+def fetch_url_content(url):
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        return soup.get_text(separator="\n", strip=True)
+    except Exception as e:
+        print(f"Error fetching content from {url}: {e}")
+        return None
 
 # Helper function to generate Arabic report
 def generate_arabic_report(
@@ -49,23 +72,29 @@ def generate_arabic_report(
     منظور_التقرير,
     الجمهور_المستهدف,
     النقاط_والجوانب_الهامة,
-    إضافة_مصادر
+    sources
 ):
     نقاط = "\n".join(f"- {نقطة}" for نقطة in النقاط_والجوانب_الهامة)
-    المصادر = (
-        "\n\nيرجى استخدام المصادر التالية لدعم التقرير:\n" + "\n".join(إضافة_مصادر)
-        if إضافة_مصادر
-        else ""
-    )
+    محتويات_المصادر = []
+    
+    # Fetch content for each source
+    for source in sources:
+        content = fetch_url_content(source)
+        if content:
+            محتويات_المصادر.append(f"Source: {source}\nContent: {content}")
+    
+    المصادر = "\n\n".join(محتويات_المصادر)
 
     arabic_prompt = f"""
-    اكتب تقريرًا باللغة العربية يحمل عنوانا عن: "{موضوع_التقرير}". 
+    اكتب تقريرًا باللغة العربية يحمل عنوانًا عن: "{موضوع_التقرير}". 
     يجب أن يتم كتابة التقرير من منظور: {', '.join(منظور_التقرير)}. 
     الجمهور المستهدف للتقرير هم: {الجمهور_المستهدف}. 
     النقاط والجوانب الهامة التي يجب تناولها:
     {نقاط}
+    
+    يرجى استخدام المعلومات التالية من المصادر الداعمة:
     {المصادر}
-    انا اريد json file مفصلا و وشارحا باستفاضة بدون ذكر المصدر في كل نقطة يحتوي على:
+انا اريد json file مفصلا و وشارحا باستفاضة بدون ذكر المصدر في كل نقطة يحتوي على:
       headings: [
           version: 1,
           title: عنوان فرعي لحميع النقاط,
@@ -79,13 +108,11 @@ def generate_arabic_report(
 لاحظ اني اريد heading يحتوي على مجموعة titles و كل title له content مفصل 
 و انا اريد اكثر من heading    
     """
-
+    print(arabic_prompt)
     conversation_history = [
         {
             "role": "system",
-            "content": """You are a professional journalist writing an article in a detailed json file about the user input.
-                          Use the provided context, write in Arabic, and create a json report with details and informations between 1000 and 1500 words.
-                          Incorporate the sources given in the prompt when relevant."""
+            "content": "You are a professional journalist tasked with writing an Arabic report in detailed JSON format. Use the sources provided to enrich the content."
         },
         {"role": "user", "content": arabic_prompt}
     ]
@@ -114,7 +141,6 @@ def generate_arabic_report(
     except Exception as e:
         print(f"Error while processing the response: {e}")
         return None
-
 
 @app.route('/generate_report', methods=['POST'])
 @swag_from({
@@ -173,6 +199,9 @@ def generate_report():
         الجمهور_المستهدف = data.get('Target_audience')
         النقاط_والجوانب_الهامة = data.get('Important_points_and_aspects', [])
         إضافة_مصادر = data.get('Add_Resources', [])
+        # Fetch URLs and content
+        api_urls = fetch_urls(موضوع_التقرير, منظور_التقرير)
+        all_sources = list(set(api_urls + إضافة_مصادر))
 
         report = generate_arabic_report(
             موضوع_التقرير,
