@@ -112,7 +112,7 @@ def generate_arabic_report(
     conversation_history = [
         {
             "role": "system",
-            "content": "You are a professional journalist tasked with writing an Arabic report in detailed JSON format. Use the sources provided to enrich the content."
+            "content": "You are a professional journalist tasked with writing a detailed informative and valuable Arabic article in detailed JSON format. Use the sources provided to enrich the content."
         },
         {"role": "user", "content": arabic_prompt}
     ]
