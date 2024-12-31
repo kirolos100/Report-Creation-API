@@ -35,7 +35,7 @@ swagger = Swagger(app, template={
         "description": "API for Automated Machine Learning tool",
         "version": "1.0.0"
     },
-    "host": "localhost:5000",
+    "host": "https://ndcreportcreationapi-fje6fhfcgehhfgdt.eastus-01.azurewebsites.net",
     "basePath": "/",
 })
 
@@ -86,7 +86,7 @@ def generate_arabic_report(
     المصادر = "\n\n".join(محتويات_المصادر)
 
     arabic_prompt = f"""
-    اكتب تقريرًا باللغة العربية يحمل عنوانًا عن: "{موضوع_التقرير}". 
+    اعطني هيكل لتقرير باللغة العربية يحمل عنوانًا عن: "{موضوع_التقرير}". 
     يجب أن يتم كتابة التقرير من منظور: {', '.join(منظور_التقرير)}. 
     الجمهور المستهدف للتقرير هم: {الجمهور_المستهدف}. 
     النقاط والجوانب الهامة التي يجب تناولها:
@@ -101,7 +101,7 @@ def generate_arabic_report(
           listItemsList: [
               listItems: [
                   title: عنوان النقطة,
-                  content: محتوى تلك النقطة مكتوبا ب HTML tags
+                  content: محتوى تلك النقطة مكتوبا ب HTML tags انا اريد جملة واحدة فقط لا غير توضح تلك محتوى تلك النقطة و تلك الجملة يجب ان تبدا ب "هذه النقطة لهذا العنوان ستتخدث عن ..."
     المقال يجب ان يحتوي على اكثر من heading باكثر من عنوان فرعي و اكثر من النقطة
 لا تقوم بتغيير هذا ال Format الذي يبدا ب list of headings.
     لا تقوم بتغيير ترتيب ال format 
