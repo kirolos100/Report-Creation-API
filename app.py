@@ -136,8 +136,7 @@ def generate_arabic_report(
             cleaned_response = cleaned_response[:-3].strip()
 
         # Check if the cleaned response is valid JSON
-        structured_json = json.loads(cleaned_response)
-        return structured_json
+        return cleaned_response
     except Exception as e:
         print(f"Error while processing the response: {e}")
         return None
@@ -210,7 +209,7 @@ def generate_report():
             النقاط_والجوانب_الهامة,
             إضافة_مصادر
         )
-        return jsonify({"report": report})
+        return report, 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
