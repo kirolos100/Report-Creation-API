@@ -107,6 +107,7 @@ def generate_arabic_report(
     لا تقوم بتغيير ترتيب ال format 
 لاحظ اني اريد heading يحتوي على مجموعة titles و كل title له content مفصل 
 و انا اريد اكثر من heading    
+قم بارجاع الناتج النهائي في شكل JSON Format و احذر ان ترجع ب String Format
     """
     print(arabic_prompt)
     conversation_history = [
