@@ -211,7 +211,14 @@ def generate_report():
         )
         return report, 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        report = generate_arabic_report(
+            موضوع_التقرير,
+            منظور_التقرير,
+            الجمهور_المستهدف,
+            النقاط_والجوانب_الهامة,
+            إضافة_مصادر
+        )
+        return report, 200
 
 # Root route for testing
 @app.route("/")
