@@ -107,13 +107,12 @@ def generate_arabic_report(
     لا تقوم بتغيير ترتيب ال format 
 لاحظ اني اريد heading يحتوي على مجموعة titles و كل title له content مفصل 
 و انا اريد اكثر من heading    
-قم بارجاع الناتج النهائي في شكل JSON Format و احذر ان ترجع ب String Format
     """
     print(arabic_prompt)
     conversation_history = [
         {
             "role": "system",
-            "content": "You are a professional journalist tasked with writing a detailed informative and valuable Arabic article in JSON format. The output should contain detailed statistics and analysis for every point."
+            "content": "You are a professional journalist tasked with writing a detailed informative and valuable Arabic article in JSON format not in String Format. The output should contain detailed statistics and analysis for every point."
         },
         {"role": "user", "content": arabic_prompt}
     ]
@@ -137,7 +136,8 @@ def generate_arabic_report(
             cleaned_response = cleaned_response[:-3].strip()
 
         # Check if the cleaned response is valid JSON
-        return cleaned_response
+        structured_json = json.loads(cleaned_response)
+        return structured_json
     except Exception as e:
         print(f"Error while processing the response: {e}")
         return None
