@@ -96,7 +96,7 @@ def generate_arabic_report(
     {المصادر}    
 
 انا اريد json file مفصلا و وشارحا باستفاضة بدون ذكر المصدر في كل نقطة يحتوي على:
-      headings: [
+      headings: [ لاحظ ان الheadings تحتوي على list كبيرة التي تحتوي على listItmesList list & listItems list
           version: 1,
           title: عنوان فرعي لحميع النقاط,
           listItemsList: [
@@ -106,6 +106,7 @@ def generate_arabic_report(
     المقال يجب ان يحتوي على اكثر من heading باكثر من عنوان فرعي و اكثر من النقطة
 لا تقوم بتغيير هذا ال Format الذي يبدا ب list of headings.
     لا تقوم بتغيير ترتيب ال format 
+لاحظ ان الheadings تحتوي على list كبيرة التي تحتوي على listItmesList list & listItems list
 لاحظ اني اريد heading يحتوي على مجموعة titles و كل title له content مفصل 
 و انا اريد اكثر من heading    
     """
