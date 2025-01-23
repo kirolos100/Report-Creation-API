@@ -108,6 +108,7 @@ def generate_arabic_report(
     لا تقوم بتغيير ترتيب ال format 
 لاحظ ان الheadings تحتوي على list كبيرة التي تحتوي على listItmesList list & listItems list
 لاحظ اني اريد heading يحتوي على مجموعة titles و كل title له content مفصل 
+لا تنسى عنوان او ال title لكل heading فانا اريد عنوان رئيسي لكل النقاط التي تكون بداخل ذلك ال heading و داخل كل heading يوجد عناوين فرعية و محتوى او content لكل نقطة منهم
 و انا اريد اكثر من heading    
     """
     print(arabic_prompt)
