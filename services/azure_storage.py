@@ -12,15 +12,16 @@ from azure.storage.queue import QueueClient
 load_dotenv()
 
 # Environment / configuration
-STORAGE_ACCOUNT_NAME = os.getenv("STORAGE_ACCOUNT_NAME")
 
-DEFAULT_CONTAINER = os.getenv("DEFAULT_CONTAINER", "mainproject")
-AUDIO_FOLDER = os.getenv("AUDIO_FOLDER", "audios")
-TRANSCRIPTION_FOLDER = os.getenv("TRANSCRIPTION_FOLDER", "transcriptions")
-EVAL_FOLDER = os.getenv("EVAL_FOLDER", "evals")
-PROMPT_FOLDER = os.getenv("PROMPT_FOLDER", "prompts")
-LLM_ANALYSIS_FOLDER = os.getenv("LLM_ANALYSIS_FOLDER", "llmanalysis")
-STORAGE_QUEUE_NAME = os.getenv("STORAGE_QUEUE_NAME", "integration-queue")
+# Hardcoded configuration from .env
+STORAGE_ACCOUNT_NAME = "nidallhxy634olzi4"
+DEFAULT_CONTAINER = "mainproject"
+AUDIO_FOLDER = "audios"
+TRANSCRIPTION_FOLDER = "transcriptions"
+EVAL_FOLDER = "evaluations"
+PROMPT_FOLDER = "prompts"
+LLM_ANALYSIS_FOLDER = "llmanalysis"
+STORAGE_QUEUE_NAME = "integration-queue"
 
 # Flexible auth: FORCE using your provided connection string
 AZURE_STORAGE_CONNECTION_STRING = "DefaultEndpointsProtocol=https;AccountName=nidallhxy634olzi4;AccountKey=LfQXoW+2L4UPzv+W+Pu+VSffj1u1FjlKGkxa8Nf8OlqADHDRMz11pegIC+OCDmSfILrBTL01i0hH+AStUN5cVg==;EndpointSuffix=core.windows.net"
