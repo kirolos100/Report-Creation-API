@@ -1,0 +1,4 @@
+    It is a call center call between an Contoso contact center agent and a customer. 
+    The conversation may include references to Contso. 
+    You must transcribe it as accurately as possible.
+    Each sentence in the transcription should be timestamped precisely.
