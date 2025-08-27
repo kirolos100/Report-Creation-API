@@ -1,12 +1,9 @@
-import os
+
 from services import azure_oai
 import json
-from dotenv import load_dotenv
 from azure.identity import DefaultAzureCredential
 from azure.core.credentials import AzureKeyCredential
-
 import re
-
 from azure.search.documents import SearchClient
 from azure.search.documents.indexes import SearchIndexClient
 from azure.search.documents.indexes.models import (
@@ -24,16 +21,17 @@ from azure.search.documents.indexes.models import (
     SearchIndex,
 )
 
-load_dotenv()
-
-# Prefer API key if provided; otherwise fall back to AAD
-AZURE_SEARCH_ADMIN_KEY = os.getenv("AZURE_SEARCH_ADMIN_KEY") or os.getenv("AZURE_SEARCH_API_KEY") or os.getenv("AZURE_SEARCH_KEY")
-AZURE_SEARCH_QUERY_KEY = os.getenv("AZURE_SEARCH_QUERY_KEY")  # optional, for query-only
+# Hardcoded Azure Search and related config
+AZURE_SEARCH_ADMIN_KEY = "iLuMen0MdGU8E5mUncG8DO1LnwrpuwFHcgUPdjvp9aAzSeAbfVpF"
+AZURE_SEARCH_QUERY_KEY = None  # optional, for query-only
 azure_credentials = DefaultAzureCredential()
-
-AZURE_SEARCH_ENDPOINT = os.getenv("AZURE_SEARCH_ENDPOINT")
-if not AZURE_SEARCH_ENDPOINT:
-    raise ValueError("Please provide a valid Azure Search endpoint.")
+AZURE_SEARCH_ENDPOINT = "https://srch-nida-sak3hzdu5e6mk.search.windows.net"
+DEFAULT_CONTAINER = "mainproject"
+AUDIO_FOLDER = "audios"
+TRANSCRIPTION_FOLDER = "transcriptions"
+EVAL_FOLDER = "evaluations"
+LLM_ANALYSIS_FOLDER = "llmanalysis"
+STORAGE_QUEUE_NAME = "integration-queue"
 
 def _get_index_credential():
     # Use admin key for index management if available

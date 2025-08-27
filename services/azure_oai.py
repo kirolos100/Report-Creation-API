@@ -1,43 +1,22 @@
-import os
+
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-from dotenv import load_dotenv
 import re
-
 import base64
 
-load_dotenv()
+# Hardcoded Azure OpenAI and transcription config
+AZURE_OPENAI_ENDPOINT = "https://general-openai03.openai.azure.com/"
+AZURE_OPENAI_DEPLOYMENT_NAME = "gpt-4o"
+AZURE_OPENAI_API_KEY = "63UVtjzdkXtMvT5HTPVf4X7x4h7xXulpchTZTixwQOmjRgC2ek7UJQQJ99BEACHYHv6XJ3w3AAABACOGzYDr"
+AZURE_OPENAI_EMBEDDING_MODEL = "text-embedding-ada-002"
+AZURE_OPENAI_API_VERSION = "2024-02-01"
+AZURE_WHISPER_MODEL = "whisper"
+AZURE_AUDIO_MODEL = "gpt-4o-audio-preview"
 
-# Defaults from user-provided credentials (used if env vars are not set)
-os.environ.setdefault("AZURE_OPENAI_ENDPOINT", "https://general-openai03.openai.azure.com/")
-os.environ.setdefault("AZURE_OPENAI_DEPLOYMENT_NAME", "gpt-4o")
-os.environ.setdefault("AZURE_OPENAI_API_KEY", "63UVtjzdkXtMvT5HTPVf4X7x4h7xXulpchTZTixwQOmjRgC2ek7UJQQJ99BEACHYHv6XJ3w3AAABACOGzYDr")
-os.environ.setdefault("AZURE_OPENAI_EMBEDDING_MODEL", "text-embedding-ada-002")
-os.environ.setdefault("AZURE_OPENAI_API_VERSION", "2024-11-01-preview")
-os.environ.setdefault("AZURE_WHISPER_MODEL", "whisper")
-os.environ.setdefault("AZURE_AUDIO_MODEL", "gpt-4o-audio-preview")
-
-# Prefer API key auth if provided; otherwise fall back to Azure AD token
-AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
-_aad_token_provider = None
-if not AZURE_OPENAI_API_KEY:
-    _aad_token_provider = get_bearer_token_provider(DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default")
-
-AZURE_OPENAI_ENDPOINT=os.getenv("AZURE_OPENAI_ENDPOINT")
-if not AZURE_OPENAI_ENDPOINT:
-    raise ValueError("AZURE_OPENAI_ENDPOINT is not set.")
-
-AZURE_OPENAI_DEPLOYMENT_NAME=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"]
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-11-01-preview")
-
-AZURE_WHISPER_MODEL=os.environ["AZURE_WHISPER_MODEL"]
-AZURE_AUDIO_MODEL=os.getenv("AZURE_AUDIO_MODEL", "")
-
-AZURE_OPENAI_EMBEDDING_MODEL = os.getenv("AZURE_OPENAI_EMBEDDING_MODEL")
-if (AZURE_OPENAI_EMBEDDING_MODEL == 'text-embedding-ada-002'):
-    EMBEDDING_DIM = 1536    # For text-embedding-ada-002
-elif (AZURE_OPENAI_EMBEDDING_MODEL == 'text-embedding-3-large'):
-    EMBEDDING_DIM = 3072    # For text-embedding-3-large
+if AZURE_OPENAI_EMBEDDING_MODEL == 'text-embedding-ada-002':
+    EMBEDDING_DIM = 1536
+elif AZURE_OPENAI_EMBEDDING_MODEL == 'text-embedding-3-large':
+    EMBEDDING_DIM = 3072
 
 def get_oai_client():
     if AZURE_OPENAI_API_KEY:
@@ -49,7 +28,7 @@ def get_oai_client():
     return AzureOpenAI(
         api_version=AZURE_OPENAI_API_VERSION,
         azure_endpoint=AZURE_OPENAI_ENDPOINT,
-        azure_ad_token_provider=_aad_token_provider,
+
     )
 
 def build_o1_prompt(prompt_file, transcript):
@@ -154,6 +133,7 @@ def transcribe_gpt4_audio(audio_file):
     file = open(audio_file, "rb")
     encoded_string = base64.b64encode(file.read()).decode('utf-8')
     file.close()
+    import os
     file_extension = os.path.splitext(audio_file)[1][1:]
     messages=[
         {
@@ -194,7 +174,7 @@ def get_embedding(query_text):
         oai_emb_client = AzureOpenAI(
             api_version=AZURE_OPENAI_API_VERSION,
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
-            azure_ad_token_provider=_aad_token_provider,
+
         )
 
     response = oai_emb_client.embeddings.create(
