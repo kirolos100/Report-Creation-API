@@ -1227,5 +1227,5 @@ def reindex_all_calls() -> Dict[str, Any]:
             "total_calls": 0
         }
 
-
-
+if __name__ == "__main__":
+    app.run(debug=True)
