@@ -834,10 +834,11 @@ def get_insights() -> Dict[str, Any]:
         }
 
 @app.route('/chat', methods=['POST'])
-def chat_with_data(payload: Dict[str, Any]) -> Dict[str, Any]:
+def chat_with_data():
     """Chat with calls using Azure AI Search index 'marketing_sentiment_details' for retrieval, with long-chat handling.
     Body: { query: string, history?: [{role: 'user'|'ai', text: string}], top_k?: int }
     """
+    payload: Dict[str, Any] = request.get_json(force=True) or {}
     query = (payload or {}).get("query", "").strip()
     if not query:
         return {"answer": "Please provide a query."}
