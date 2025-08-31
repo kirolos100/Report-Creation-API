@@ -1,11 +1,11 @@
 import os
 import threading
-from dotenv import load_dotenv
-
 import azure.cognitiveservices.speech as speechsdk
 
-load_dotenv()
-
+# Hardcoded Speech Service Configuration
+SPEECH_ENDPOINT = "https://uaenorth.api.cognitive.microsoft.com/"
+SPEECH_REGION = "uaenorth"
+SPEECH_KEY = "5bVGgxC4rjSjBhKgngZDLdSm5cLiNida4vXJ8vEIWQi608yOQj1GJQQJ99BGACF24PCXJ3w3AAAYACOGnyyd"
 
 def _ticks_to_timestamp(ticks: int) -> str:
     # Azure Speech offsets/durations are in 100-nanosecond units (ticks)
