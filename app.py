@@ -741,68 +741,70 @@ def dashboard_summary() -> Dict[str, Any]:
 
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
-    """Get AI-generated comprehensive insights and summary from all call summaries"""
+    """Get AI-generated summary from all call summaries"""
     try:
         calls = list_calls()
         summaries: List[str] = []
+        
+        print(f"DEBUG: Found {len(calls)} total calls")
         
         # Collect all call summaries
         for c in calls:
             a = c.get("analysis") or {}
             if isinstance(a, dict) and a.get("summary"):
                 summaries.append(a["summary"])
+                print(f"DEBUG: Added summary for call {c.get('call_id', 'unknown')}")
+            else:
+                print(f"DEBUG: No summary found for call {c.get('call_id', 'unknown')}")
+                print(f"DEBUG: Analysis keys: {list(a.keys()) if isinstance(a, dict) else 'Not a dict'}")
         
-        overall_insights = None
-        comprehensive_summary = None
+        print(f"DEBUG: Collected {len(summaries)} summaries out of {len(calls)} calls")
         
+        # Generate summary
+        comprehensive_insights = None
         if summaries:
             try:
-                # Get raw AI insights
-                overall_insights = azure_oai.get_insights(summaries)
+                print(f"DEBUG: Generating summary from {len(summaries)} summaries")
+                print(f"DEBUG: First summary preview: {summaries[0][:100]}...")
                 
-                # Generate comprehensive summary paragraph
+                # Simple prompt for summary
                 summary_prompt = """
-                Based on the following call summaries, write a comprehensive, well-structured summary paragraph that covers:
+                Based on the following call summaries, write a comprehensive summary that covers:
                 
-                1. **Overall Call Volume and Trends**: Total number of calls and general patterns
+                1. **Overall Call Volume**: Total number of calls and general patterns
                 2. **Main Issues and Topics**: Most common problems or subjects discussed
                 3. **Customer Satisfaction**: Overall sentiment and satisfaction levels
                 4. **Agent Performance**: How well agents are handling calls
                 5. **Key Insights**: Important observations and patterns
                 6. **Recommendations**: Actionable suggestions for improvement
                 
-                Write this as a professional, easy-to-read paragraph with clear sections. Use bullet points or numbered lists where appropriate.
-                Focus on providing actionable insights that management can use.
+                Write this as a professional, easy-to-read summary with clear sections.
                 """
                 
-                comprehensive_summary = azure_oai.call_llm(summary_prompt, "\n\n".join(summaries))
+                comprehensive_insights = azure_oai.call_llm(summary_prompt, "\n\n".join(summaries))
+                print(f"DEBUG: Successfully generated summary")
                 
             except Exception as e:
-                print(f"Error generating insights: {e}")
-                overall_insights = None
-                comprehensive_summary = None
+                print(f"Error generating summary: {e}")
+                comprehensive_insights = None
+        else:
+            print("DEBUG: No summaries found to generate insights from")
         
         return {
             "status": "ok",
-            "insights": overall_insights or "No insights available yet.",
-            "comprehensive_summary": comprehensive_summary or "No summary available yet.",
-            "total_calls_analyzed": len(summaries),
+            "comprehensive_insights": comprehensive_insights or "No insights available yet.",
             "total_calls": len(calls),
-            "summary_breakdown": {
-                "total_calls": len(calls),
-                "calls_with_summaries": len(summaries),
-                "coverage_percentage": round((len(summaries) / len(calls) * 100), 1) if calls else 0
-            }
+            "summaries_found": len(summaries)
         }
         
     except Exception as e:
+        print(f"ERROR in /insights endpoint: {e}")
         return {
             "status": "error",
             "message": f"Failed to generate insights: {str(e)}",
-            "insights": None,
-            "comprehensive_summary": None,
-            "total_calls_analyzed": 0,
-            "total_calls": 0
+            "comprehensive_insights": None,
+            "total_calls": 0,
+            "summaries_found": 0
         }
 
 
