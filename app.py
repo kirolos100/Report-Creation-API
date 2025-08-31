@@ -739,6 +739,44 @@ def dashboard_summary() -> Dict[str, Any]:
         "overall_insights": overall_insights,
     }
 
+@app.route('/insights', methods=['GET'])
+def get_insights() -> Dict[str, Any]:
+    """Get AI-generated insights from all call summaries"""
+    try:
+        calls = list_calls()
+        summaries: List[str] = []
+        
+        # Collect all call summaries
+        for c in calls:
+            a = c.get("analysis") or {}
+            if isinstance(a, dict) and a.get("summary"):
+                summaries.append(a["summary"])
+        
+        overall_insights = None
+        if summaries:
+            try:
+                overall_insights = azure_oai.get_insights(summaries)
+            except Exception as e:
+                print(f"Error generating insights: {e}")
+                overall_insights = None
+        
+        return {
+            "status": "ok",
+            "insights": overall_insights or "No insights available yet.",
+            "total_calls_analyzed": len(summaries),
+            "total_calls": len(calls)
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Failed to generate insights: {str(e)}",
+            "insights": None,
+            "total_calls_analyzed": 0,
+            "total_calls": 0
+        }
+
+
 
 @app.route('/chat', methods=['POST'])
 def chat_with_data(payload: Dict[str, Any]) -> Dict[str, Any]:
