@@ -741,7 +741,7 @@ def dashboard_summary() -> Dict[str, Any]:
 
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
-    """Get AI-generated insights from all call summaries"""
+    """Get AI-generated comprehensive insights and summary from all call summaries"""
     try:
         calls = list_calls()
         summaries: List[str] = []
@@ -753,18 +753,46 @@ def get_insights() -> Dict[str, Any]:
                 summaries.append(a["summary"])
         
         overall_insights = None
+        comprehensive_summary = None
+        
         if summaries:
             try:
+                # Get raw AI insights
                 overall_insights = azure_oai.get_insights(summaries)
+                
+                # Generate comprehensive summary paragraph
+                summary_prompt = """
+                Based on the following call summaries, write a comprehensive, well-structured summary paragraph that covers:
+                
+                1. **Overall Call Volume and Trends**: Total number of calls and general patterns
+                2. **Main Issues and Topics**: Most common problems or subjects discussed
+                3. **Customer Satisfaction**: Overall sentiment and satisfaction levels
+                4. **Agent Performance**: How well agents are handling calls
+                5. **Key Insights**: Important observations and patterns
+                6. **Recommendations**: Actionable suggestions for improvement
+                
+                Write this as a professional, easy-to-read paragraph with clear sections. Use bullet points or numbered lists where appropriate.
+                Focus on providing actionable insights that management can use.
+                """
+                
+                comprehensive_summary = azure_oai.call_llm(summary_prompt, "\n\n".join(summaries))
+                
             except Exception as e:
                 print(f"Error generating insights: {e}")
                 overall_insights = None
+                comprehensive_summary = None
         
         return {
             "status": "ok",
             "insights": overall_insights or "No insights available yet.",
+            "comprehensive_summary": comprehensive_summary or "No summary available yet.",
             "total_calls_analyzed": len(summaries),
-            "total_calls": len(calls)
+            "total_calls": len(calls),
+            "summary_breakdown": {
+                "total_calls": len(calls),
+                "calls_with_summaries": len(summaries),
+                "coverage_percentage": round((len(summaries) / len(calls) * 100), 1) if calls else 0
+            }
         }
         
     except Exception as e:
@@ -772,6 +800,7 @@ def get_insights() -> Dict[str, Any]:
             "status": "error",
             "message": f"Failed to generate insights: {str(e)}",
             "insights": None,
+            "comprehensive_summary": None,
             "total_calls_analyzed": 0,
             "total_calls": 0
         }
