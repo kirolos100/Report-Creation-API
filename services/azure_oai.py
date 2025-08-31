@@ -13,23 +13,29 @@ AZURE_OPENAI_API_VERSION = "2024-02-01"
 AZURE_WHISPER_MODEL = "whisper"
 AZURE_AUDIO_MODEL = "gpt-4o-audio-preview"
 
+# Speech Service Configuration
+SPEECH_ENDPOINT = "https://uaenorth.api.cognitive.microsoft.com/"
+SPEECH_REGION = "uaenorth"
+SPEECH_KEY = "5bVGgxC4rjSjBhKgngZDLdSm5cLiNida4vXJ8vEIWQi608yOQj1GJQQJ99BGACF24PCXJ3w3AAAYACOGnyyd"
+
 if AZURE_OPENAI_EMBEDDING_MODEL == 'text-embedding-ada-002':
     EMBEDDING_DIM = 1536
 elif AZURE_OPENAI_EMBEDDING_MODEL == 'text-embedding-3-large':
     EMBEDDING_DIM = 3072
 
+_client = None
+
 def get_oai_client():
-    if AZURE_OPENAI_API_KEY:
-        return AzureOpenAI(
+    global _client
+    if _client is None:
+        _client = AzureOpenAI(
             api_key=AZURE_OPENAI_API_KEY,
             api_version=AZURE_OPENAI_API_VERSION,
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
+            max_retries=3,
+            timeout=30.0
         )
-    return AzureOpenAI(
-        api_version=AZURE_OPENAI_API_VERSION,
-        azure_endpoint=AZURE_OPENAI_ENDPOINT,
-
-    )
+    return _client
 
 def build_o1_prompt(prompt_file, transcript):
     
