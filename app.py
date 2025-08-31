@@ -598,8 +598,7 @@ def list_calls() -> List[Dict[str, Any]]:
             return []
 
 
-@app.route('/calls/{call_id}', methods=['GET'])
-
+@app.route('/calls/<call_id>', methods=['GET'])
 def get_call(call_id: str) -> Dict[str, Any]:
     transcript = azure_storage.read_transcription(f"{call_id}.txt")
     # Prefer persona analysis
