@@ -741,58 +741,84 @@ def dashboard_summary() -> Dict[str, Any]:
 
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
-    """Get AI-generated summary from all call summaries"""
+    """Get AI-generated comprehensive insights from all call summaries"""
     try:
         calls = list_calls()
         summaries: List[str] = []
         
         print(f"DEBUG: Found {len(calls)} total calls")
         
-        # Collect all call summaries
+        # Collect all call summaries (both top-level and nested)
         for c in calls:
             a = c.get("analysis") or {}
-            if isinstance(a, dict) and a.get("summary"):
-                summaries.append(a["summary"])
-                print(f"DEBUG: Added summary for call {c.get('call_id', 'unknown')}")
-            else:
-                print(f"DEBUG: No summary found for call {c.get('call_id', 'unknown')}")
-                print(f"DEBUG: Analysis keys: {list(a.keys()) if isinstance(a, dict) else 'Not a dict'}")
+            if isinstance(a, dict):
+                # Try top-level summary first
+                if a.get("summary"):
+                    summaries.append(a["summary"])
+                    print(f"DEBUG: Added top-level summary for call {c.get('call_id', 'unknown')}")
+                # Try nested summary as fallback
+                elif a.get("Call Generated Insights", {}).get("summary"):
+                    summaries.append(a["Call Generated Insights"]["summary"])
+                    print(f"DEBUG: Added nested summary for call {c.get('call_id', 'unknown')}")
+                else:
+                    print(f"DEBUG: No summary found for call {c.get('call_id', 'unknown')}")
         
         print(f"DEBUG: Collected {len(summaries)} summaries out of {len(calls)} calls")
         
-        # Generate summary
+        # Generate comprehensive insights
         comprehensive_insights = None
         if summaries:
             try:
-                print(f"DEBUG: Generating summary from {len(summaries)} summaries")
-                print(f"DEBUG: First summary preview: {summaries[0][:100]}...")
+                print(f"DEBUG: Generating insights from {len(summaries)} summaries")
                 
-                # Simple prompt for summary
+                # Enhanced prompt for better insights
                 summary_prompt = """
-                Based on the following call summaries, write a comprehensive summary that covers:
-                
-                1. **Overall Call Volume**: Total number of calls and general patterns
-                2. **Main Issues and Topics**: Most common problems or subjects discussed
-                3. **Customer Satisfaction**: Overall sentiment and satisfaction levels
-                4. **Agent Performance**: How well agents are handling calls
-                5. **Key Insights**: Important observations and patterns
-                6. **Recommendations**: Actionable suggestions for improvement
-                
-                Write this as a professional, easy-to-read summary with clear sections.
+                You are an expert call center analyst. Based on the following call summaries, provide a comprehensive analysis that includes:
+
+                **Overall Call Volume and Patterns**
+                - Total number of calls analyzed
+                - General patterns and trends observed
+
+                **Main Issues and Topics**
+                - Most common problems or subjects discussed
+                - Recurring themes across calls
+
+                **Customer Satisfaction Analysis**
+                - Overall sentiment trends
+                - Customer satisfaction levels
+                - Areas of concern
+
+                **Agent Performance Assessment**
+                - How well agents are handling calls
+                - Professionalism levels
+                - Areas for improvement
+
+                **Key Insights and Observations**
+                - Important patterns and trends
+                - Notable findings
+                - Critical issues identified
+
+                **Actionable Recommendations**
+                - Specific suggestions for improvement
+                - Process enhancements
+                - Training needs
+
+                Write this as a professional, well-structured analysis with clear sections and bullet points where appropriate. Focus on providing actionable insights that management can use to improve call center operations.
                 """
                 
                 comprehensive_insights = azure_oai.call_llm(summary_prompt, "\n\n".join(summaries))
-                print(f"DEBUG: Successfully generated summary")
+                print(f"DEBUG: Successfully generated comprehensive insights")
                 
             except Exception as e:
-                print(f"Error generating summary: {e}")
-                comprehensive_insights = None
+                print(f"ERROR generating insights: {e}")
+                comprehensive_insights = f"Error generating insights: {str(e)}"
         else:
             print("DEBUG: No summaries found to generate insights from")
+            comprehensive_insights = "No insights available yet. Please upload some audio files to generate insights."
         
         return {
             "status": "ok",
-            "comprehensive_insights": comprehensive_insights or "No insights available yet.",
+            "comprehensive_insights": comprehensive_insights,
             "total_calls": len(calls),
             "summaries_found": len(summaries)
         }
@@ -802,12 +828,10 @@ def get_insights() -> Dict[str, Any]:
         return {
             "status": "error",
             "message": f"Failed to generate insights: {str(e)}",
-            "comprehensive_insights": None,
+            "comprehensive_insights": f"Error: {str(e)}",
             "total_calls": 0,
             "summaries_found": 0
         }
-
-
 
 @app.route('/chat', methods=['POST'])
 def chat_with_data(payload: Dict[str, Any]) -> Dict[str, Any]:
