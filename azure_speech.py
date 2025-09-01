@@ -37,8 +37,18 @@ def transcribe_with_speech_sdk(audio_file_path: str) -> str:
     try:
         speech_config = speechsdk.SpeechConfig(subscription=speech_key, region=speech_region)
         speech_config.output_format = speechsdk.OutputFormat.Detailed
+        
+        # Enable speaker diarization
         speech_config.set_property(
             property_id=speechsdk.PropertyId.SpeechServiceResponse_RequestWordLevelTimestamps,
+            value="true",
+        )
+        speech_config.set_property(
+            property_id=speechsdk.PropertyId.SpeechServiceResponse_RequestSentenceLevelTimestamps,
+            value="true",
+        )
+        speech_config.set_property(
+            property_id=speechsdk.PropertyId.SpeechServiceResponse_RequestSpeakerDiarization,
             value="true",
         )
         
