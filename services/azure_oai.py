@@ -1,3 +1,4 @@
+
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 import re
@@ -30,9 +31,7 @@ def get_oai_client():
         _client = AzureOpenAI(
             api_key=AZURE_OPENAI_API_KEY,
             api_version=AZURE_OPENAI_API_VERSION,
-            azure_endpoint=AZURE_OPENAI_ENDPOINT,
-            max_retries=2,
-            timeout=15.0
+            azure_endpoint=AZURE_OPENAI_ENDPOINT
         )
     return _client
 
@@ -138,7 +137,6 @@ def transcribe_gpt4_audio(audio_file):
     file = open(audio_file, "rb")
     encoded_string = base64.b64encode(file.read()).decode('utf-8')
     file.close()
-    import os
     file_extension = os.path.splitext(audio_file)[1][1:]
     messages=[
         {
@@ -179,7 +177,7 @@ def get_embedding(query_text):
         oai_emb_client = AzureOpenAI(
             api_version=AZURE_OPENAI_API_VERSION,
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
-
+            azure_ad_token_provider=_aad_token_provider,
         )
 
     response = oai_emb_client.embeddings.create(
