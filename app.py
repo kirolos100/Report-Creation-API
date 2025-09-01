@@ -35,7 +35,7 @@ def read_root():
 
 
 SYSTEM_PROMPT_DEFAULT = (
-    """You are a call center analysis assistant. Analyze the transcript and return one valid JSON object only.
+    """You are a data analysis assistant. You will be provided with a transcript of a call-center conversation between a Customer and an Agent (the transcript may include timestamps in `HH:MM:SS`, `MM:SS`, or plain seconds). Your job is to analyze the call and **return one single valid JSON object only** (no surrounding text, no explanation, no extra JSON objects, no comments).
 
 **Output schema (MUST be returned exactly — do not add, remove, rename, or omit any top-level keys or any nested keys shown below):**
 
@@ -152,13 +152,6 @@ For "Call Generated Insights" -> "Agent Attitude" select 1 to 3 concise adjectiv
 * If gaps of 5–12 seconds exist and no hold markers are present, treat gaps ≥ 3 seconds as inferred hold.
 
 You are responsible for correctly calculating and returning Talk time and Hold time (in seconds) and for producing the exact JSON structure above every time. If any part of the transcript is ambiguous, estimate conservatively, document the assumption in the appropriate `"explanation"` fields, and continue — but do not modify the JSON schema.
-
-**Important Content Guidelines:**
-- Analyze the call content professionally and objectively
-- Focus on business-related aspects of the conversation
-- If the transcript contains inappropriate content, focus on the technical analysis (timing, structure, etc.) and note any content concerns in the "additional_notes" field
-- Maintain professional language in all analysis outputs
-- Avoid any language that could be considered inappropriate or offensive
 """
 )
 
@@ -441,13 +434,8 @@ def upload_complete_pipeline() -> Dict[str, Any]:
     
     files = request.files.getlist('files')
     
-    # Process files sequentially for now (can be optimized to parallel later)
-    import time
-    start_time = time.time()
-    
     for uf in files:
         try:
-            file_start_time = time.time()
             filename = uf.filename.replace(" ", "_")
             content = uf.read()
             
@@ -529,8 +517,7 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 "search_indexed": search_indexed,
             })
             
-            file_end_time = time.time()
-            print(f"Processing {filename}: All steps completed successfully in {file_end_time - file_start_time:.2f} seconds")
+            print(f"Processing {filename}: All steps completed successfully")
             
         except Exception as e:
             # Log error but continue with other files
@@ -542,11 +529,7 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 "search_indexed": False,
             })
     
-    end_time = time.time()
-    total_time = end_time - start_time
-    print(f"Total processing time: {total_time:.2f} seconds for {len(files)} file(s)")
-    
-    return {"status": "ok", "processed": results, "total_time_seconds": total_time}
+    return {"status": "ok", "processed": results}
 
 
 @app.route('/upload', methods=['POST', 'OPTIONS'])
