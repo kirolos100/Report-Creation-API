@@ -170,3 +170,5 @@ def transcribe_with_speech_batch(
         raise RuntimeError("No valid transcription lines generated")
 
     return "\n".join(lines)
+
+
