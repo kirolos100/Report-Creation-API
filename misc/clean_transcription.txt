@@ -5,8 +5,8 @@ Your task is to return the conversation in a structured, diarized format, labeli
 Please follow these guidelines:
 
 1. **Speaker Identification**: Determine the speaker based on context and typical call center patterns:
-   - Agent typically: introduces themselves, asks for account information, uses formal language, offers assistance
-   - Customer typically: explains their issue, provides personal information, asks questions about their account
+   - Agent indicators: asking for account numbers, confirming details, saying "thank you for calling", using formal language, asking for verification
+   - Customer indicators: providing personal information, asking for help, expressing problems or complaints, using informal language
 
 2. **Preserve Original Content**: Use the exact words in Arabic from the transcript; do not add, remove, or change words.
 
@@ -29,4 +29,5 @@ Example output:
 7. **Handle Ambiguous Cases**: If speaker identification is unclear, make your best judgment based on context and typical call center conversation patterns. 
 
 8. the Transcription should contain the speaker identification even it was agent or customer. 
+
 
