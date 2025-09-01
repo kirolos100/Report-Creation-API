@@ -147,7 +147,7 @@ def transcribe_gpt4_audio(audio_file):
             "content": [
                 { 
                     "type": "text",
-                    "text": "Transcribe the audio as is. no explanation needed. If you are able to detect the agent versus the customer, please label them as such. use **Customer:** and **Agent:** to label the speakers."
+                    "text": "Transcribe the audio as is. no explanation needed. If you are able to detect the agent versus the customer, please label them as such. Use 'Customer:' and 'Agent:' to label the speakers. Include timestamps in [HH:MM:SS.mmm] format at the beginning of each line."
                 },
                 {
                     "type": "input_audio",
