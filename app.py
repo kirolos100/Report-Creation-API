@@ -1,5 +1,3 @@
-from fastapi import FastAPI, UploadFile, File
-from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Dict, Any
 import json
 import os
@@ -15,8 +13,17 @@ from flask_swagger_ui import get_swaggerui_blueprint
 from flask_cors import CORS  # Import CORS
 
 app = Flask(__name__)
-CORS(app)  # Allow cross-origin requests
-# CORS
+
+# Configure CORS to allow your frontend origin
+CORS(app, 
+     origins=[
+         "https://green-smoke-05633cb03-preview.westeurope.2.azurestaticapps.net",
+         "http://localhost:3000",  # For local development
+         "http://localhost:5173",  # For Vite dev server
+     ],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+     allow_headers=['Content-Type', 'Authorization', 'Accept'],
+     supports_credentials=True)
 
 
 # Health check endpoint
@@ -411,17 +418,26 @@ def _extract_structured_fields(analysis: Any) -> Dict[str, Any]:
 
     return out
 
-@app.route('/upload-complete', methods=['POST'])
-async def upload_complete_pipeline(
-    files: List[UploadFile] = File(...),
-) -> Dict[str, Any]:
+@app.route('/upload-complete', methods=['POST', 'OPTIONS'])
+def upload_complete_pipeline() -> Dict[str, Any]:
     """Complete pipeline: Upload → Transcribe → Analyze → Index for search"""
+    
+    # Handle OPTIONS preflight request
+    if request.method == 'OPTIONS':
+        return {"status": "ok"}
+    
     results: List[Dict[str, Any]] = []
+    
+    # Get files from Flask request
+    if 'files' not in request.files:
+        return {"status": "error", "message": "No files provided", "processed": []}
+    
+    files = request.files.getlist('files')
     
     for uf in files:
         try:
             filename = uf.filename.replace(" ", "_")
-            content = await uf.read()
+            content = uf.read()
             
             # Step 1: Upload audio to blob storage
             print(f"Processing {filename}: Step 1 - Uploading to blob storage...")
@@ -516,12 +532,10 @@ async def upload_complete_pipeline(
     return {"status": "ok", "processed": results}
 
 
-@app.route('/upload', methods=['POST'])
-async def upload_and_process(
-    files: List[UploadFile] = File(...),
-) -> Dict[str, Any]:
+@app.route('/upload', methods=['POST', 'OPTIONS'])
+def upload_and_process() -> Dict[str, Any]:
     """Legacy endpoint - now redirects to complete pipeline"""
-    return await upload_complete_pipeline(files)
+    return upload_complete_pipeline()
 
 
 @app.route('/health', methods=['GET'])
@@ -833,11 +847,15 @@ def get_insights() -> Dict[str, Any]:
             "summaries_found": 0
         }
 
-@app.route('/chat', methods=['POST'])
+@app.route('/chat', methods=['POST', 'OPTIONS'])
 def chat_with_data():
     """Chat with calls using Azure AI Search index 'marketing_sentiment_details' for retrieval, with long-chat handling.
     Body: { query: string, history?: [{role: 'user'|'ai', text: string}], top_k?: int }
     """
+    # Handle OPTIONS preflight request
+    if request.method == 'OPTIONS':
+        return {"status": "ok"}
+        
     payload: Dict[str, Any] = request.get_json(force=True) or {}
     query = (payload or {}).get("query", "").strip()
     if not query:
@@ -1106,9 +1124,13 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
             ]
         }
 
-@app.route('/reindex-all-calls', methods=['POST'])
+@app.route('/reindex-all-calls', methods=['POST', 'OPTIONS'])
 def reindex_all_calls() -> Dict[str, Any]:
     """Re-index all existing calls into the Azure Search index for chat functionality."""
+    # Handle OPTIONS preflight request
+    if request.method == 'OPTIONS':
+        return {"status": "ok"}
+        
     try:
         print("Starting re-indexing of all existing calls...")
         
