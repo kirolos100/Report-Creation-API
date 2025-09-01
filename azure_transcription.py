@@ -211,7 +211,14 @@ def transcribe_audio(audio_path: str):
                 # Try to parse speakers with GPT-4 first
                 parsed_conversation = parse_speakers_with_gpt4(transcription)
                 if parsed_conversation and len(parsed_conversation.strip()) > 0:
-                    return parsed_conversation
+                    # Check if speaker labels were actually added
+                    if "Agent:" in parsed_conversation or "Customer:" in parsed_conversation:
+                        print("GPT-4 successfully added speaker labels")
+                        return parsed_conversation
+                    else:
+                        print("GPT-4 returned transcript without speaker labels, using manual labeling...")
+                        manual_labeled = add_speaker_labels_manually(transcription)
+                        return manual_labeled
                 
                 # If GPT-4 fails, use manual speaker labeling as fallback
                 print("GPT-4 speaker parsing failed, using manual speaker labeling...")
@@ -229,7 +236,14 @@ def transcribe_audio(audio_path: str):
                 # Try to parse speakers with GPT-4 first
                 parsed_conversation = parse_speakers_with_gpt4(transcription)
                 if parsed_conversation and len(parsed_conversation.strip()) > 0:
-                    return parsed_conversation
+                    # Check if speaker labels were actually added
+                    if "Agent:" in parsed_conversation or "Customer:" in parsed_conversation:
+                        print("GPT-4 successfully added speaker labels")
+                        return parsed_conversation
+                    else:
+                        print("GPT-4 returned transcript without speaker labels, using manual labeling...")
+                        manual_labeled = add_speaker_labels_manually(transcription)
+                        return manual_labeled
                 
                 # If GPT-4 fails, use manual speaker labeling as fallback
                 print("GPT-4 speaker parsing failed, using manual speaker labeling...")
