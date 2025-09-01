@@ -1,4 +1,3 @@
-
 from services import azure_oai
 from services import azure_speech
 from services import azure_speech_batch
@@ -43,6 +42,11 @@ def validate_audio_file(audio_path: str) -> tuple[bool, str]:
 
 def parse_speakers_with_gpt4(transcribed_text: str) -> str:
     try:
+        # Check if the transcript already has speaker labels
+        if "Customer:" in transcribed_text or "Agent:" in transcribed_text:
+            print("Transcript already has speaker labels, skipping GPT-4 processing")
+            return transcribed_text
+            
         new_transcription = azure_oai.call_llm('./misc/clean_transcription.txt', transcribed_text)
         # Defensive fallback: if the model cannot diarize, keep original transcript
         output_text = (new_transcription or "").strip()
