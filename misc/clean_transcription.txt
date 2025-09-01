@@ -29,5 +29,6 @@ Example output:
 7. **Handle Ambiguous Cases**: If speaker identification is unclear, make your best judgment based on context and typical call center conversation patterns. 
 
 8. the Transcription should contain the speaker identification even it was agent or customer. 
+Please ensure the call transcription includes a required speaker label (“Agent” or “Customer”) before each utterance, and include timestamps for every line.
 
 
