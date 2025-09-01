@@ -4,11 +4,11 @@ Your task is to return the conversation in a structured, diarized format, labeli
 
 Please follow these guidelines:
 
-1. **Speaker Identification**: If the transcript already contains speaker labels (like "Agent:" or "Customer:"), preserve them exactly. If not, determine the speaker based on context and typical call center patterns:
+1. **Speaker Identification**: Determine the speaker based on context and typical call center patterns:
    - Agent typically: introduces themselves, asks for account information, uses formal language, offers assistance
    - Customer typically: explains their issue, provides personal information, asks questions about their account
 
-2. **Preserve Original Content**: Use the exact words from the transcript; do not add, remove, or change words.
+2. **Preserve Original Content**: Use the exact words in Arabic from the transcript; do not add, remove, or change words.
 
 3. **Maintain Chronological Order**: Keep the conversation flow in the exact order it appears in the transcript.
 
@@ -26,4 +26,7 @@ Example output:
 
 6. **No Additional Content**: Only output the structured conversation. Do not add explanations, analysis, or commentary.
 
-7. **Handle Ambiguous Cases**: If speaker identification is unclear, make your best judgment based on context and typical call center conversation patterns.
+7. **Handle Ambiguous Cases**: If speaker identification is unclear, make your best judgment based on context and typical call center conversation patterns. 
+
+8. the Transcription should contain the speaker identification even it was agent or customer. 
+
