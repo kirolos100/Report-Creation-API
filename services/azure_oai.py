@@ -31,8 +31,8 @@ def get_oai_client():
             api_key=AZURE_OPENAI_API_KEY,
             api_version=AZURE_OPENAI_API_VERSION,
             azure_endpoint=AZURE_OPENAI_ENDPOINT,
-            max_retries=3,
-            timeout=30.0
+            max_retries=2,
+            timeout=15.0
         )
     return _client
 
