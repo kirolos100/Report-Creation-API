@@ -1,4 +1,3 @@
-
 from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 import re
@@ -6,7 +5,7 @@ import base64
 
 # Hardcoded Azure OpenAI and transcription config
 AZURE_OPENAI_ENDPOINT = "https://general-openai03.openai.azure.com/"
-AZURE_OPENAI_DEPLOYMENT_NAME = "gpt-4o"
+AZURE_OPENAI_DEPLOYMENT_NAME = "gpt-4.1"
 AZURE_OPENAI_API_KEY = "63UVtjzdkXtMvT5HTPVf4X7x4h7xXulpchTZTixwQOmjRgC2ek7UJQQJ99BEACHYHv6XJ3w3AAABACOGzYDr"
 AZURE_OPENAI_EMBEDDING_MODEL = "text-embedding-ada-002"
 AZURE_OPENAI_API_VERSION = "2024-02-01"
