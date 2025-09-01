@@ -42,11 +42,6 @@ def validate_audio_file(audio_path: str) -> tuple[bool, str]:
 
 def parse_speakers_with_gpt4(transcribed_text: str) -> str:
     try:
-        # Check if the transcript already has speaker labels
-        if "Agent:" in transcribed_text or "Customer:" in transcribed_text:
-            print("Transcript already contains speaker labels, skipping GPT-4 processing")
-            return transcribed_text
-            
         new_transcription = azure_oai.call_llm('./misc/clean_transcription.txt', transcribed_text)
         # Defensive fallback: if the model cannot diarize, keep original transcript
         output_text = (new_transcription or "").strip()
@@ -57,7 +52,7 @@ def parse_speakers_with_gpt4(transcribed_text: str) -> str:
             return transcribed_text
         return output_text
     except Exception as e:
-        print(f"Error cleaning transcription with GPT-4: {e}")
+        print(f"Error cleaning transcription with 4o: {e}")
         return transcribed_text
 
 def transcribe_audio(audio_path: str):
@@ -80,11 +75,9 @@ def transcribe_audio(audio_path: str):
             transcription = azure_speech_batch.transcribe_with_speech_batch(sas_url)
             if transcription and len(transcription.strip()) > 0:
                 print(f"Speech Batch successful for {audio_path}")
-                print(f"Raw transcription preview: {transcription[:200]}...")
                 # Parse speakers with GPT-4 for better conversation structure
                 parsed_conversation = parse_speakers_with_gpt4(transcription)
                 if parsed_conversation and len(parsed_conversation.strip()) > 0:
-                    print(f"Final transcription preview: {parsed_conversation[:200]}...")
                     return parsed_conversation
                 return transcription
         except Exception as e:
@@ -96,11 +89,9 @@ def transcribe_audio(audio_path: str):
             transcription = azure_speech.transcribe_with_speech_sdk(local_file)
             if transcription and len(transcription.strip()) > 0:
                 print(f"Speech SDK successful for {audio_path}")
-                print(f"Raw transcription preview: {transcription[:200]}...")
                 # Parse speakers with GPT-4 for better conversation structure
                 parsed_conversation = parse_speakers_with_gpt4(transcription)
                 if parsed_conversation and len(parsed_conversation.strip()) > 0:
-                    print(f"Final transcription preview: {parsed_conversation[:200]}...")
                     return parsed_conversation
                 return transcription
         except Exception as e:
