@@ -131,5 +131,3 @@ def transcribe_with_speech_sdk(audio_file_path: str) -> str:
             raise RuntimeError(f"Invalid audio file argument: {audio_file_path} format not supported")
         else:
             raise RuntimeError(f"Speech SDK transcription failed for {audio_file_path}: {str(e)}")
-
-
