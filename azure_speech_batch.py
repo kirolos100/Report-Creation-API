@@ -65,7 +65,13 @@ def transcribe_with_speech_batch(
     body = {
         "contentUrls": [audio_sas_url],
         "properties": {
-            "diarizationEnabled": (not use_stereo_audio),
+            "diarizationEnabled": True,  # Always enable speaker diarization
+            "diarization": {
+                "speakers": {
+                    "minCount": 2,
+                    "maxCount": 2
+                }
+            },
             "timeToLive": "PT30M",
             "wordLevelTimestampsEnabled": False,
             "displayFormWordLevelTimestampsEnabled": False,
@@ -163,8 +169,18 @@ def transcribe_with_speech_batch(
         nbest = (p.get("nBest") or [])
         text = (nbest[0].get("display") if nbest else "").strip()
         ts = _ticks_to_timestamp(p.get("offsetInTicks", 0))
-        if text:
-            lines.append(f"{ts} {text}")
+        
+        # Try to get speaker information from the phrase
+        speaker_id = p.get("speaker", {}).get("id", None)
+        if speaker_id is not None:
+            # Map speaker ID to Agent/Customer (typically speaker 0 is agent, speaker 1 is customer)
+            speaker_label = "Agent" if speaker_id == 0 else "Customer"
+            if text:
+                lines.append(f"{ts} {speaker_label}: {text}")
+        else:
+            # Fallback: no speaker info, just timestamp and text
+            if text:
+                lines.append(f"{ts} {text}")
 
     if not lines:
         raise RuntimeError("No valid transcription lines generated")
