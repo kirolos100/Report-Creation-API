@@ -41,15 +41,6 @@ def transcribe_with_speech_sdk(audio_file_path: str) -> str:
             property_id=speechsdk.PropertyId.SpeechServiceResponse_RequestWordLevelTimestamps,
             value="true",
         )
-        # Enable speaker diarization
-        speech_config.set_property(
-            property_id=speechsdk.PropertyId.SpeechServiceResponse_RequestSentenceBoundary,
-            value="true"
-        )
-        speech_config.set_property(
-            property_id=speechsdk.PropertyId.SpeechServiceResponse_RequestSpeakerDiarization,
-            value="true"
-        )
         
         # Add additional configuration for better compatibility
         speech_config.set_property(
@@ -82,7 +73,6 @@ def transcribe_with_speech_sdk(audio_file_path: str) -> str:
             # Fallback to result.text if parsing detailed words is not available
             timestamp = "[00:00:00.000]"
             text = result.text or ""
-            speaker_label = "Unknown"
 
             # Try to parse NBest words via SDK object if available
             try:
@@ -92,21 +82,11 @@ def transcribe_with_speech_sdk(audio_file_path: str) -> str:
                     words = best.words
                     if len(words) > 0 and getattr(words[0], "offset", None) is not None:
                         timestamp = _ticks_to_timestamp(words[0].offset)
-                        
-                        # Try to extract speaker information from the detailed JSON
-                        try:
-                            if json:
-                                json_data = json.loads(json) if isinstance(json, str) else json
-                                speaker_info = json_data.get("SpeakerDiarization", {})
-                                speaker_id = speaker_info.get("Speaker", 0)
-                                speaker_label = "Agent" if speaker_id == 0 else "Customer"
-                        except Exception:
-                            pass
             except Exception:
                 pass
 
             if text:
-                lines.append(f"{timestamp} {speaker_label}: {text.strip()}")
+                lines.append(f"{timestamp} {text.strip()}")
 
         def handle_canceled(evt: speechsdk.SpeechRecognitionCanceledEventArgs):
             nonlocal error_occurred, error_message
