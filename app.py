@@ -15,15 +15,7 @@ from flask_cors import CORS  # Import CORS
 app = Flask(__name__)
 
 # Configure CORS to allow your frontend origin
-CORS(app, 
-     origins=[
-         "https://green-smoke-05633cb03-preview.westeurope.2.azurestaticapps.net",
-         "http://localhost:3000",  # For local development
-         "http://localhost:5173",  # For Vite dev server
-     ],
-     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-     allow_headers=['Content-Type', 'Authorization', 'Accept'],
-     supports_credentials=True)
+CORS(app, resources={r"/*": {"origins": [...]}}, allow_headers="*", supports_credentials=True)
 
 
 # Health check endpoint
