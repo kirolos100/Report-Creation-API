@@ -4,7 +4,9 @@ Your task is to return the conversation in a structured, diarized format, labeli
 
 Please follow these guidelines:
 
-1. **Speaker Identification**: If the transcript already contains speaker labels (Agent/Customer), preserve them. If not, determine whether each line should be labeled "Agent:" or "Customer:" based on context and typical call center patterns (agents usually ask for account numbers, confirm details, etc.).
+1. **Speaker Identification**:Determine whether each line should be labeled "Agent:" or "Customer:" based on context and typical call center patterns (agents usually ask for account numbers, confirm details, etc.).
+- Agent indicators: asking for account numbers, confirming details, saying "thank you for calling", using formal language, asking for verification
+- Customer indicators: providing personal information, asking for help, expressing problems or complaints, using informal language
 
 2. **Preserve Original Content**: Use the exact words from the transcript; do not add or remove words.
 
@@ -22,4 +24,4 @@ Please follow these guidelines:
 
 7. **No Additional Commentary**: Only output the structured conversation. Do not add extra explanations or analysis.
 
-**Important**: If the input transcript already has timestamps and speaker labels in the correct format, return it as-is without modification.
+
