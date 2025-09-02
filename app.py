@@ -114,8 +114,10 @@ Don't change any key names or structure. You must return all keys shown above.
 
      * If a later customer utterance exists, conservatively treat the earlier of (a) the next customer utterance start time or (b) a minimum conservative default hold duration of 5 seconds after the "please wait" timestamp — whichever yields the larger hold duration — and document this choice in the "explanation" field.
      * If the transcript has no subsequent timestamps at all, estimate a conservative default hold duration of 5 seconds, and explain the assumption.
+* Once the Agent says word like "لحظات" you should detects and caclculate the hold time until the agent return and resume the call with the customer.
    * If explicit markers are absent, infer hold from silence gaps between consecutive utterances where `gap >= 3 seconds` (gap = next\_utterance\_start − previous\_utterance\_end). Sum these inferred hold durations.
    * Output MUST be an integer number of seconds (never 0).
+ * if you detects one second or more time hold you should write it in the json in the Hold time field that number of seconds and if you detect speaking time less than the total audio time so we have a hold time that was not calculated 
    * Prefer Arabic "please wait" detection and explicit markers over inferred silence. Always compute hold durations from timestamps and output as integer seconds (never 0). If exact timestamps are insufficient, estimate conservatively and explain assumptions concisely.
    * Important: Prefer Arabic "please wait" detection and explicit markers over silence inference. Always compute hold durations from timestamps and output integer seconds. Never output 0 for hold time if a "please wait" utterance is present — if timestamps are missing or incomplete for the hold, estimate conservatively and explain assumptions in the relevant "explanation" fields.
 
@@ -165,6 +167,7 @@ For "Call Generated Insights" -> "Agent Attitude" select 1 to 3 concise adjectiv
 
 You are responsible for correctly calculating and returning Talk time and Hold time (in seconds) and for producing the exact JSON structure above every time. If any part of the transcript is ambiguous, estimate conservatively, document the assumption in the appropriate `"explanation"` fields, and continue — but do not modify the JSON schema.
 Don't change any key names or structure. You must return all keys shown above.
+
 
 """
 )
