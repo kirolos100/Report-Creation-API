@@ -125,6 +125,7 @@ def harmonize_normalized_key(name: str) -> str:
     mapping = {
         # Align variant "Call Summary" under Call Generated Insights to schema key "summary"
         "Call_Generated_Insights_Call_Summary": "Call_Generated_Insights_summary",
+        "Call_Generated_Insights_Call_summary": "Call_Generated_Insights_summary",
     }
     return mapping.get(name, name)
 
@@ -388,6 +389,13 @@ def load_json_into_azure_search(index_name, json_docs):
                 final_doc[normalized_key] = " ".join(map(str, v))
             else:
                 final_doc[normalized_key] = v
+
+        # Safety: remove any leftover wrong keys that would cause schema errors
+        if "Call_Generated_Insights_Call_Summary" in final_doc:
+            # If the correct key is missing, move value; else drop duplicate
+            if "Call_Generated_Insights_summary" not in final_doc:
+                final_doc["Call_Generated_Insights_summary"] = final_doc["Call_Generated_Insights_Call_Summary"]
+            del final_doc["Call_Generated_Insights_Call_Summary"]
 
         actions.append(final_doc)
 
