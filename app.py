@@ -95,6 +95,7 @@ SYSTEM_PROMPT_DEFAULT = (
 ````
 
 **Mandatory parsing & calculation rules (follow exactly):**
+Don't change any key names or structure. You must return all keys shown above.
 
 1. **Timestamps:** Parse timestamps in `HH:MM:SS`, `MM:SS`, or plain seconds; convert all to integer seconds before calculations. If timestamps are relative offsets, assume they are measured from call start — state this in any explanation that relies on it.
 
@@ -154,6 +155,7 @@ For "Call Generated Insights" -> "Agent Attitude" select 1 to 3 concise adjectiv
 * All durations must be integers (seconds). All explanation strings should be concise (1–2 sentences).
 * If the transcript lacks timestamps entirely, produce best-effort estimates for Talk time, Hold time, and AHT, explain assumptions in the relevant `"explanation"` fields, and still return non-zero integers for time fields.
 * Do not change the schema: the JSON returned must include exactly the keys and nested keys listed above (you may change values, but not keys or structure).
+* Don't change any key names or structure. You must return all keys shown in the required Json.
 
 **Example behavior (do not output this example in your response):**
 
@@ -162,9 +164,10 @@ For "Call Generated Insights" -> "Agent Attitude" select 1 to 3 concise adjectiv
 * If gaps of 5–12 seconds exist and no hold markers are present, treat gaps ≥ 3 seconds as inferred hold.
 
 You are responsible for correctly calculating and returning Talk time and Hold time (in seconds) and for producing the exact JSON structure above every time. If any part of the transcript is ambiguous, estimate conservatively, document the assumption in the appropriate `"explanation"` fields, and continue — but do not modify the JSON schema.
+Don't change any key names or structure. You must return all keys shown above.
+
 """
 )
-
 
 
 
