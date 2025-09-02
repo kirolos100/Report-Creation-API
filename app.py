@@ -15,8 +15,26 @@ from flask_cors import CORS  # Import CORS
 app = Flask(__name__)
 
 # Configure CORS to allow your frontend origin
-CORS(app, resources={r"/*": {"origins": [...]}}, allow_headers="*", supports_credentials=True)
-
+CORS(
+    app,
+    resources={r"/*": {"origins": [
+        "https://green-smoke-05633cb03-preview.westeurope.2.azurestaticapps.net",
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ]}},
+    methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH", "HEAD"],
+    allow_headers=[
+        "Content-Type",
+        "Authorization",
+        "Accept",
+        "Cache-Control",       # <--- ensure Cache-Control is explicitly allowed
+        "X-Requested-With",
+        "Origin",
+        "Accept-Language",
+    ],
+    supports_credentials=True,
+    expose_headers=["Content-Disposition"],
+)
 
 # Health check endpoint
 @app.route('/', methods=['GET'])
