@@ -1,4 +1,3 @@
-
 from services import azure_oai
 import json
 from azure.identity import DefaultAzureCredential
@@ -118,6 +117,26 @@ def normalize_field_name(name: str) -> str:
         normalized = "f_" + normalized
     return normalized
 
+def harmonize_normalized_key(name: str) -> str:
+    """Map known variant field names to the canonical names expected by the index schema.
+
+    This operates on already-normalized keys (output of normalize_field_name).
+    """
+    mapping = {
+        # Align variant "Call Summary" under Call Generated Insights to schema key "summary"
+        "Call_Generated_Insights_Call_Summary": "Call_Generated_Insights_summary",
+    }
+    return mapping.get(name, name)
+
+def harmonize_flattened(flattened: dict) -> dict:
+    """Return a copy with normalized and harmonized keys according to the schema."""
+    out = {}
+    for k, v in flattened.items():
+        normalized = normalize_field_name(k)
+        canonical = harmonize_normalized_key(normalized)
+        out[canonical] = v
+    return out
+
 def infer_field_type(value):
     """
     Simple approach to map Python types to Azure Search field types.
@@ -225,6 +244,7 @@ def _build_index_definition(index_name: str, sample_document: dict) -> SearchInd
     """Build the SearchIndex definition from sample document."""
     # Flatten the sample document (in case there's one-level nesting).
     flattened_sample = flatten_json(sample_document)
+    flattened_sample = harmonize_flattened(flattened_sample)
 
     # Build dynamic fields
     dynamic_fields = build_dynamic_fields_from_json(flattened_sample)
@@ -340,6 +360,7 @@ def load_json_into_azure_search(index_name, json_docs):
     actions = []
     for i, doc in enumerate(json_docs):
         flattened = flatten_json(doc)
+        flattened = harmonize_flattened(flattened)
         doc_id = f"doc-{i}"
 
         # We'll build a 'content' string from all string fields
@@ -360,7 +381,8 @@ def load_json_into_azure_search(index_name, json_docs):
         }
         # Add flattened fields using normalized keys
         for k, v in flattened.items():
-            normalized_key = normalize_field_name(k)
+            # Keys are already normalized and harmonized
+            normalized_key = k
             # If the value is a list, join it into a string
             if isinstance(v, list):
                 final_doc[normalized_key] = " ".join(map(str, v))
