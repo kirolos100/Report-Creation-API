@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 from services import azure_storage, azure_transcription, azure_oai, azure_search
-from flask import Flask, request, jsonify, make_response
+from flask import Flask, request, jsonify
 import json
 import requests
 from bs4 import BeautifulSoup
@@ -11,7 +11,6 @@ from openai import AzureOpenAI
 from flasgger import Swagger, swag_from
 from flask_swagger_ui import get_swaggerui_blueprint
 from flask_cors import CORS  # Import CORS
-import time
 
 app = Flask(__name__)
 
@@ -232,162 +231,10 @@ def _cache_get(key: str, ttl_seconds: int) -> Any | None:
     if (datetime.utcnow().timestamp() - ts) > ttl_seconds:
         _CACHE.pop(key, None)
         return None
-    data = entry.get("data")
-    print(f"DEBUG: _cache_get returning data of type: {type(data)}")
-    return data
+    return entry.get("data")
 
 def _cache_set(key: str, value: Any) -> None:
-    print(f"DEBUG: _cache_set storing value of type: {type(value)}")
     _CACHE[key] = {"data": value, "ts": datetime.utcnow().timestamp()}
-
-def _cache_clear() -> None:
-    """Clear all cached data"""
-    _CACHE.clear()
-    print("DEBUG: Cache cleared")
-
-# --------------------------
-# Summary precompute persisted in Blob Storage
-# --------------------------
-SUMMARY_BLOB_PREFIX = "analytics"
-SUMMARY_BLOB_NAME = "dashboard-summary.json"
-
-def _compute_dashboard_summary(calls: List[Dict[str, Any]]) -> Dict[str, Any]:
-    print(f"DEBUG: _compute_dashboard_summary called with calls of type: {type(calls)}")
-    print(f"DEBUG: calls value: {calls}")
-    
-    summaries: List[str] = []
-    sentiment_scores: List[float] = []
-    sentiment_labels: Dict[str, int] = {}
-    dispositions: Dict[str, int] = {}
-    categories: Dict[str, int] = {}
-    resolution_status: Dict[str, int] = {}
-    subjects: Dict[str, int] = {}
-    services: Dict[str, int] = {}
-    agent_professionalism: Dict[str, int] = {}
-    resolved_count = 0
-    aht_values: List[float] = []
-    talk_values: List[float] = []
-    hold_values: List[float] = []
-
-    # Debug: check if calls is actually a list
-    if not isinstance(calls, list):
-        print(f"ERROR: calls is not a list, it's {type(calls)}")
-        return {"error": "calls parameter is not a list"}
-
-    print(f"DEBUG: About to iterate over {len(calls)} calls")
-    for c in calls:
-        a = c.get("analysis") or {}
-        if isinstance(a, dict) and a.get("summary"):
-            summaries.append(a["summary"])
-        s = a.get("sentiment", {})
-        if isinstance(s, dict):
-            score = s.get("score")
-            try:
-                sentiment_scores.append(float(score))
-            except Exception:
-                pass
-        disp = a.get("disposition") or a.get("Disposition")
-        if isinstance(disp, dict):
-            dscore = disp.get("score")
-            if dscore:
-                dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
-        resolved = a.get("resolved")
-        if isinstance(resolved, dict) and resolved.get("score") is True:
-            resolved_count += 1
-        structured = _extract_structured_fields(a)
-        if structured.get("customer_sentiment"):
-            lbl = str(structured["customer_sentiment"]).strip()
-            sentiment_labels[lbl] = sentiment_labels.get(lbl, 0) + 1
-        if structured.get("call_categorization"):
-            cat = str(structured["call_categorization"]).strip()
-            categories[cat] = categories.get(cat, 0) + 1
-        if structured.get("resolution_status"):
-            rs = str(structured["resolution_status"]).strip()
-            resolution_status[rs] = resolution_status.get(rs, 0) + 1
-        if structured.get("main_subject"):
-            subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
-        if structured.get("services"):
-            sv = structured["services"]
-            if isinstance(sv, str):
-                parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
-                for p in parts:
-                    services[p] = services.get(p, 0) + 1
-            elif isinstance(sv, list):
-                for p in sv:
-                    services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
-        if structured.get("agent_professionalism"):
-            att = str(structured.get("agent_professionalism")).strip()
-            if att:
-                agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
-        aht = structured.get("aht")
-        if isinstance(aht, dict):
-            try:
-                aht_values.append(float(aht.get("score")))
-            except Exception:
-                pass
-        if structured.get("talk_time_seconds") is not None:
-            try:
-                talk_values.append(float(structured.get("talk_time_seconds")))
-            except Exception:
-                pass
-        if structured.get("hold_time_seconds") is not None:
-            try:
-                hold_values.append(float(structured.get("hold_time_seconds")))
-            except Exception:
-                pass
-
-    overall_insights = None
-    if summaries:
-        try:
-            overall_insights = azure_oai.get_insights(summaries)
-        except Exception:
-            overall_insights = None
-
-    total = len(calls)
-    avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else None
-    avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
-    avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
-    avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
-
-    return {
-        "total_calls": total,
-        "avg_sentiment": avg_sentiment,
-        "sentiment_labels": sentiment_labels,
-        "dispositions": dispositions,
-        "categories": categories,
-        "resolution_status": resolution_status,
-        "subjects": subjects,
-        "services": services,
-        "agent_professionalism": agent_professionalism,
-        "resolved_rate": (resolved_count / total) if total else None,
-        "avg_aht_seconds": avg_aht,
-        "avg_talk_seconds": avg_talk,
-        "avg_hold_seconds": avg_hold,
-        "overall_insights": overall_insights,
-    }
-
-def _load_persisted_summary():
-    try:
-        content = azure_storage.read_blob(SUMMARY_BLOB_NAME, SUMMARY_BLOB_PREFIX)
-        if not content:
-            return None, None, None
-        # get blob props for ETag / Last-Modified
-        client = azure_storage.get_blob_client(SUMMARY_BLOB_NAME, SUMMARY_BLOB_PREFIX)
-        props = client.get_blob_properties()
-        etag = getattr(props, 'etag', None)
-        last_modified = getattr(props, 'last_modified', None)
-        return json.loads(content), etag, last_modified
-    except Exception:
-        return None, None, None
-
-def _persist_summary(obj: Dict[str, Any]):
-    try:
-        azure_storage.upload_blob(json.dumps(obj), SUMMARY_BLOB_NAME, SUMMARY_BLOB_PREFIX)
-        # Invalidate in-process cache
-        _CACHE.pop("dashboard_summary", None)
-        return True
-    except Exception:
-        return False
 
 
 
@@ -640,33 +487,33 @@ def _extract_structured_fields(analysis: Any) -> Dict[str, Any]:
 @app.route('/upload-complete', methods=['POST', 'OPTIONS'])
 def upload_complete_pipeline() -> Dict[str, Any]:
     """Complete pipeline: Upload → Transcribe → Analyze → Index for search"""
-    
+
     # Handle OPTIONS preflight request
     if request.method == 'OPTIONS':
         return {"status": "ok"}
-    
+
     results: List[Dict[str, Any]] = []
-    
+
     # Get files from Flask request
     if 'files' not in request.files:
         return {"status": "error", "message": "No files provided", "processed": []}
-    
+
     files = request.files.getlist('files')
-    
+
     for uf in files:
         try:
             filename = uf.filename.replace(" ", "_")
             content = uf.read()
-            
+
             # Step 1: Upload audio to blob storage
             print(f"Processing {filename}: Step 1 - Uploading to blob storage...")
             azure_storage.upload_blob(content, filename, prefix=azure_storage.AUDIO_FOLDER)
             name_no_ext = filename.rsplit(".", 1)[0]
-            
+
             # Step 2: Transcribe audio using Azure Speech services
             print(f"Processing {filename}: Step 2 - Transcribing with Azure Speech...")
             transcript = azure_transcription.transcribe_audio(filename)
-            
+
             # Check if transcription failed
             if transcript.startswith("Error:") or transcript.startswith("Audio validation failed:"):
                 print(f"Transcription failed for {filename}: {transcript}")
@@ -676,16 +523,16 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                     "search_indexed": False,
                 })
                 continue
-                
+
             # Save successful transcription
             azure_storage.upload_transcription_to_blob(name_no_ext, transcript)
             print(f"Processing {filename}: Step 2 - Transcription completed successfully")
-            
+
             # Step 3: Analyze transcript with GenAI using static system prompt
             print(f"Processing {filename}: Step 3 - Analyzing with GenAI...")
             analysis_raw = azure_oai.call_llm(SYSTEM_PROMPT_DEFAULT, transcript)
             analysis_json = _parse_json_maybe(analysis_raw)
-            
+
             # Save analysis to both default and persona folders for compatibility
             azure_storage.upload_blob(
                 json.dumps(analysis_json),
@@ -698,14 +545,14 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 prefix=azure_storage.LLM_ANALYSIS_FOLDER,
             )
             print(f"Processing {filename}: Step 3 - Analysis completed successfully")
-            
+
             # Step 4: Update Azure AI Search index for chat functionality
             print(f"Processing {filename}: Step 4 - Indexing for search...")
             try:
                 # Get current document count before indexing
                 current_count = azure_search.get_index_document_count("marketing_sentiment_details")
                 print(f"Current index document count: {current_count}")
-                
+
                 # Load the analysis JSON into the marketing_sentiment_details index
                 message, success = azure_search.load_json_into_azure_search(
                     "marketing_sentiment_details", 
@@ -723,21 +570,21 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                         print(f"Successfully added {new_count - current_count} new document(s) to search index")
                     else:
                         print(f"Document count unchanged. Document may have been updated rather than added.")
-                    
+
                     print(f"Processing {filename}: Step 4 - Search indexing completed successfully")
             except Exception as e:
                 print(f"Warning: Search indexing failed for {name_no_ext}: {e}")
                 search_indexed = False
-            
+
             results.append({
                 "file": filename,
                 "transcription_blob": f"{azure_storage.TRANSCRIPTION_FOLDER}/{name_no_ext}.txt",
                 "analysis_blob": f"{azure_storage.LLM_ANALYSIS_FOLDER}/persona/{name_no_ext}.json",
                 "search_indexed": search_indexed,
             })
-            
+
             print(f"Processing {filename}: All steps completed successfully")
-            
+
         except Exception as e:
             # Log error but continue with other files
             error_msg = f"Error processing {uf.filename}: {str(e)}"
@@ -747,16 +594,7 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 "error": error_msg,
                 "search_indexed": False,
             })
-    
-            # After processing all files, recompute and persist dashboard summary in background-safe manner
-        try:
-            calls = _list_calls_internal(refresh=True)
-            summary_obj = _compute_dashboard_summary(calls)
-            _persist_summary(summary_obj)
-            print("Dashboard summary recomputed and persisted.")
-        except Exception as e:
-            print(f"Warning: Failed to recompute/persist summary: {e}")
-    
+
     return {"status": "ok", "processed": results}
 
 
@@ -775,126 +613,129 @@ def health() -> Dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 
-def _list_calls_simple() -> List[Dict[str, Any]]:
-    """Simplified version without caching for debugging"""
+@app.route('/calls', methods=['GET'])
+def list_calls() -> List[Dict[str, Any]]:
     try:
-        print("DEBUG: _list_calls_simple called")
-        
+        # Query params for performance controls
+        page = max(1, int(request.args.get('page', '1') or '1'))
+        page_size = max(1, min(200, int(request.args.get('page_size', '100') or '100')))
+        light = request.args.get('light', '0') in ('1', 'true', 'True')
+        refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
+
+        cache_key = f"calls:page={page}:size={page_size}:light={int(light)}"
+        if not refresh:
+            cached = _cache_get(cache_key, ttl_seconds=60)
+            if cached is not None:
+                return cached
+
         # Ensure container exists
         azure_storage.ensure_container_exists(azure_storage.DEFAULT_CONTAINER)
+
         container = azure_storage.blob_service_client.get_container_client(azure_storage.DEFAULT_CONTAINER)
 
-        # Gather audio blobs
+        # Gather audio blobs from both the configured folder and anywhere in the container
         audio_exts = (".mp3", ".wav", ".m4a", ".mp4")
         audio_blobs = list(container.list_blobs(name_starts_with=f"{azure_storage.AUDIO_FOLDER}/"))
         if not audio_blobs:
+            # Fallback: scan entire container for audio extensions
             audio_blobs = [b for b in container.list_blobs() if any(b.name.lower().endswith(ext) for ext in audio_exts)]
 
-        entries = []
-        seen_call_ids = set()
-        
-        for blob in audio_blobs[:5]:  # Limit to first 5 for debugging
+        entries: List[Dict[str, Any]] = []
+        # Build a minimal index first: (call_id, audio_name, uploaded_at, blob)
+        indexed: List[Dict[str, Any]] = []
+        seen_call_ids: set[str] = set()
+        for blob in audio_blobs:
             audio_path = blob.name
             audio_name = audio_path.split("/")[-1]
             call_id = audio_name.rsplit(".", 1)[0]
             if call_id in seen_call_ids:
                 continue
             seen_call_ids.add(call_id)
+
+            # Prefer persona analysis folder
+            parsed, first_analysis_path = _persona_analysis_for_call(call_id)
+            if not parsed:
+                # Fallback: any analysis folder
+                parsed, first_analysis_path = _first_analysis_for_call(call_id)
+            category, attitude = _derive_category_and_attitude(parsed)
+            # If still missing, try a second pass: look for JSON named exactly by audio base even if extension differs
+            if (category is None or attitude is None) and not parsed:
+                # attempt: if audio file has dashes or underscores variations, try normalized id
+                norm_id = call_id.replace(" ", "_")
+                if norm_id != call_id:
+                    parsed, first_analysis_path = _persona_analysis_for_call(norm_id)
+                    if not parsed:
+                        parsed, first_analysis_path = _first_analysis_for_call(norm_id)
+                    c2, a2 = _derive_category_and_attitude(parsed)
+                    category = category or c2
+                    attitude = attitude or a2
             created = getattr(blob, "creation_time", None) or getattr(blob, "last_modified", None)
-            
+            indexed.append({
+                "call_id": call_id,
+                "audio_name": audio_name,
+                "uploaded_at": created.isoformat() if isinstance(created, datetime) else None,
+                "_blob": blob,
+            })
+
+        # newest first without loading analysis
+        indexed.sort(key=lambda x: x.get("uploaded_at") or "", reverse=True)
+
+        # Pagination window selection before any heavy I/O
+        start = (page - 1) * page_size
+        end = start + page_size
+        window = indexed[start:end]
+
+        entries: List[Dict[str, Any]] = []
+        for item in window:
+            call_id = item["call_id"]
+            audio_name = item["audio_name"]
+            uploaded_at = item["uploaded_at"]
+
+            parsed = None
+            first_analysis_path = None
+            category = None
+            attitude = None
+
+            if not light:
+                # Prefer persona analysis folder
+                parsed, first_analysis_path = _persona_analysis_for_call(call_id)
+                if not parsed:
+                    # Fallback: any analysis folder
+                    parsed, first_analysis_path = _first_analysis_for_call(call_id)
+                category, attitude = _derive_category_and_attitude(parsed)
+                if (category is None or attitude is None) and not parsed:
+                    norm_id = call_id.replace(" ", "_")
+                    if norm_id != call_id:
+                        parsed, first_analysis_path = _persona_analysis_for_call(norm_id)
+                        if not parsed:
+                            parsed, first_analysis_path = _first_analysis_for_call(norm_id)
+                        c2, a2 = _derive_category_and_attitude(parsed)
+                        category = category or c2
+                        attitude = attitude or a2
+
             entries.append({
                 "audio_name": audio_name,
                 "call_id": call_id,
                 "uploaded_at": created.isoformat() if isinstance(created, datetime) else None,
-                "analysis": None,
-                "call_category": None,
-                "agent_attitude": None,
-                "analysis_file": None,
+                "analysis": parsed,
+                "uploaded_at": uploaded_at,
+                "analysis": None if light else parsed,
+                "call_category": category,
+                "agent_attitude": attitude,
+                "analysis_file": first_analysis_path,
             })
 
-        print(f"DEBUG: _list_calls_simple returning {len(entries)} entries, type: {type(entries)}")
+        # newest first
+        entries.sort(key=lambda x: x.get("uploaded_at") or "", reverse=True)
+        _cache_set(cache_key, entries)
         return entries
-    except Exception as e:
-        print(f"DEBUG: _list_calls_simple exception: {e}")
-        return []
-
-def _list_calls_internal(page: int = 1, page_size: int = 100, light: bool = False, refresh: bool = False) -> List[Dict[str, Any]]:
-    # Use simplified version for now to debug
-    return _list_calls_simple()
-
-
-def _ensure_calls_list(calls) -> List[Dict[str, Any]]:
-    """
-    Coerce various possible return types into a list of call dicts.
-    - If `calls` is already a list, return it.
-    - If `calls` is a Flask Response, try to parse JSON and return list or the "processed" field if present.
-    - If `calls` is a dict with a 'processed' list, return that.
-    - Otherwise return an empty list.
-    """
-    if isinstance(calls, list):
-        return calls
-
-    # Flask Response handling
-    try:
-        if isinstance(calls, Response):
-            possible = calls.get_json(silent=True)
-            if isinstance(possible, list):
-                return possible
-            if isinstance(possible, dict) and isinstance(possible.get("processed"), list):
-                return possible.get("processed")
-            # fallback: try raw body parse
-            data_text = calls.get_data(as_text=True) or ""
-            try:
-                parsed = json.loads(data_text)
-                if isinstance(parsed, list):
-                    return parsed
-                if isinstance(parsed, dict) and isinstance(parsed.get("processed"), list):
-                    return parsed.get("processed")
-            except Exception:
-                pass
-            # nothing parseable -> empty
-            print("DEBUG: _ensure_calls_list: Response body not parseable as list; returning []")
+    except Exception:
+        # Fallback to simpler listing to avoid 500
+        try:
+            audios = azure_storage.list_audios()
+            return [{"audio_name": a, "call_id": a.rsplit(".", 1)[0], "uploaded_at": None, "analysis": None, "analysis_files": []} for a in audios]
+        except Exception:
             return []
-
-        # dict with processed field
-        if isinstance(calls, dict):
-            if isinstance(calls.get("processed"), list):
-                return calls.get("processed")
-            # sometimes the payload is a single object representing a call -> wrap it
-            # but prefer to return [] to avoid incorrect shapes
-            print("DEBUG: _ensure_calls_list: dict without 'processed' list; returning []")
-            return []
-
-    except Exception as e:
-        print(f"DEBUG: _ensure_calls_list exception while coercing: {e}")
-
-    # Unknown type
-    print(f"DEBUG: _ensure_calls_list coercing unexpected type {type(calls)} -> []")
-    return []
-
-
-@app.route('/calls', methods=['GET'])
-def list_calls() -> Response:
-    """Public endpoint for listing calls with HTTP cache headers (defensive against unexpected return shapes)."""
-    try:
-        page = max(1, int(request.args.get('page', '1') or '1'))
-        page_size = max(1, min(200, int(request.args.get('page_size', '100') or '100')))
-        light = request.args.get('light', '0') in ('1', 'true', 'True')
-        refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
-
-        # Use internal list function (which should return a Python list)
-        raw_entries = _list_calls_internal(page=page, page_size=page_size, light=light, refresh=refresh)
-
-        # Defensive coercion: ensure entries is list
-        entries = _ensure_calls_list(raw_entries)
-
-        resp = make_response(jsonify(entries), 200)
-        resp.headers['Cache-Control'] = 'public, max-age=30'
-        return resp
-    except Exception as e:
-        print(f"ERROR in /calls endpoint: {e}")
-        return make_response(jsonify({"error": str(e)}), 500)
-
 
 
 @app.route('/calls/<call_id>', methods=['GET'])
@@ -924,52 +765,13 @@ def get_call(call_id: str) -> Dict[str, Any]:
 
 
 @app.route('/dashboard/summary', methods=['GET'])
-def dashboard_summary() -> Response:
-    """Return persisted dashboard summary or compute live; defensive about calls list type."""
-    # Try persisted blob summary first for fast loads
-    persisted, etag, last_modified = _load_persisted_summary()
-    if persisted is not None:
-        inm = request.headers.get('If-None-Match')
-        ims = request.headers.get('If-Modified-Since')
-        if etag and inm and inm == etag:
-            resp = make_response('', 304)
-            if etag:
-                resp.headers['ETag'] = etag
-            if last_modified:
-                resp.headers['Last-Modified'] = last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT')
-            resp.headers['Cache-Control'] = 'public, max-age=60'
-            return resp
-        if last_modified and ims:
-            try:
-                from email.utils import parsedate_to_datetime
-                ims_dt = parsedate_to_datetime(ims)
-                if ims_dt >= last_modified:
-                    resp = make_response('', 304)
-                    if etag:
-                        resp.headers['ETag'] = etag
-                    resp.headers['Last-Modified'] = last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT')
-                    resp.headers['Cache-Control'] = 'public, max-age=60'
-                    return resp
-            except Exception:
-                pass
-        # Return cached summary with caching headers
-        resp = make_response(jsonify(persisted), 200)
-        if etag:
-            resp.headers['ETag'] = etag
-        if last_modified:
-            resp.headers['Last-Modified'] = last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT')
-        resp.headers['Cache-Control'] = 'public, max-age=60'
-        return resp
+def dashboard_summary() -> Dict[str, Any]:
+    # cache summary for a short time window to avoid re-computation on navigation
+    cached = _cache_get("dashboard_summary", ttl_seconds=60)
+    if cached is not None:
+        return cached
 
-    # Fallback: compute live (rare path)
-    raw_calls = _list_calls_internal(refresh=True)
-    calls = _ensure_calls_list(raw_calls)
-
-    # Defensive: ensure a list type
-    if not isinstance(calls, list):
-        print(f"DEBUG: dashboard_summary expected a list but got {type(calls)}; using empty list")
-        calls = []
-
+    calls = list_calls()
     summaries: List[str] = []
     sentiment_scores: List[float] = []
     sentiment_labels: Dict[str, int] = {}
@@ -987,7 +789,8 @@ def dashboard_summary() -> Response:
     for c in calls:
         a = c.get("analysis") or {}
         if isinstance(a, dict) and a.get("summary"):
-            summaries.append(a["summary"])
+            summaries.append(a["summary"]) 
+        # sentiment numeric (1-5)
         s = a.get("sentiment", {})
         if isinstance(s, dict):
             score = s.get("score")
@@ -995,15 +798,18 @@ def dashboard_summary() -> Response:
                 sentiment_scores.append(float(score))
             except Exception:
                 pass
+        # disposition counts
         disp = a.get("disposition") or a.get("Disposition")
         if isinstance(disp, dict):
             dscore = disp.get("score")
             if dscore:
                 dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
+        # resolved
         resolved = a.get("resolved")
         if isinstance(resolved, dict) and resolved.get("score") is True:
             resolved_count += 1
 
+        # structured insights
         structured = _extract_structured_fields(a)
         if structured.get("customer_sentiment"):
             lbl = str(structured["customer_sentiment"]).strip()
@@ -1017,6 +823,7 @@ def dashboard_summary() -> Response:
         if structured.get("main_subject"):
             subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
         if structured.get("services"):
+            # split on comma or semicolon into multiple services
             sv = structured["services"]
             if isinstance(sv, str):
                 parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
@@ -1025,10 +832,12 @@ def dashboard_summary() -> Response:
             elif isinstance(sv, list):
                 for p in sv:
                     services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
+        # Agent professionalism/attitude histogram
         if structured.get("agent_professionalism"):
             att = str(structured.get("agent_professionalism")).strip()
             if att:
                 agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
+        # AHT and times
         aht = structured.get("aht")
         if isinstance(aht, dict):
             try:
@@ -1058,6 +867,7 @@ def dashboard_summary() -> Response:
     avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
     avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
     avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
+    return {
     result = {
         "total_calls": total,
         "avg_sentiment": avg_sentiment,
@@ -1074,34 +884,28 @@ def dashboard_summary() -> Response:
         "avg_hold_seconds": avg_hold,
         "overall_insights": overall_insights,
     }
-
-    # Persist computed summary for faster future loads
-    try:
-        _persist_summary(result)
-    except Exception as e:
-        print(f"Warning: _persist_summary failed: {e}")
-
-    resp = make_response(jsonify(result), 200)
-    resp.headers['Cache-Control'] = 'public, max-age=60'
-    return resp
-
+    _cache_set("dashboard_summary", result)
+    return result
 
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
-    """Get AI-generated comprehensive insights from all call summaries (defensive against wrong types)."""
+    """Get AI-generated comprehensive insights from all call summaries"""
     try:
-        raw_calls = _list_calls_internal(refresh=True)
-        calls = _ensure_calls_list(raw_calls)
+        calls = list_calls()
+        summaries: List[str] = []
+
         print(f"DEBUG: Found {len(calls)} total calls")
 
-        summaries: List[str] = []
+        # Collect all call summaries (both top-level and nested)
         for c in calls:
             a = c.get("analysis") or {}
             if isinstance(a, dict):
+                # Try top-level summary first
                 if a.get("summary"):
                     summaries.append(a["summary"])
                     print(f"DEBUG: Added top-level summary for call {c.get('call_id', 'unknown')}")
-                elif isinstance(a.get("Call Generated Insights"), dict) and a["Call Generated Insights"].get("summary"):
+                # Try nested summary as fallback
+                elif a.get("Call Generated Insights", {}).get("summary"):
                     summaries.append(a["Call Generated Insights"]["summary"])
                     print(f"DEBUG: Added nested summary for call {c.get('call_id', 'unknown')}")
                 else:
@@ -1109,9 +913,13 @@ def get_insights() -> Dict[str, Any]:
 
         print(f"DEBUG: Collected {len(summaries)} summaries out of {len(calls)} calls")
 
+        # Generate comprehensive insights
         comprehensive_insights = None
         if summaries:
             try:
+                print(f"DEBUG: Generating insights from {len(summaries)} summaries")
+
+                # Enhanced prompt for better insights
                 summary_prompt = """
                 You are an expert call center analyst. Based on the following call summaries, provide a comprehensive analysis that includes:
 
@@ -1141,9 +949,13 @@ def get_insights() -> Dict[str, Any]:
                 - Specific suggestions for improvement
                 - Process enhancements
                 - Training needs
+
+                Write this as a professional, well-structured analysis with clear sections and bullet points where appropriate. Focus on providing actionable insights that management can use to improve call center operations.
                 """
+
                 comprehensive_insights = azure_oai.call_llm(summary_prompt, "\n\n".join(summaries))
-                print("DEBUG: Successfully generated comprehensive insights")
+                print(f"DEBUG: Successfully generated comprehensive insights")
+
             except Exception as e:
                 print(f"ERROR generating insights: {e}")
                 comprehensive_insights = f"Error generating insights: {str(e)}"
@@ -1167,6 +979,7 @@ def get_insights() -> Dict[str, Any]:
             "total_calls": 0,
             "summaries_found": 0
         }
+
 @app.route('/chat', methods=['POST', 'OPTIONS'])
 def chat_with_data():
     """Chat with calls using Azure AI Search index 'marketing_sentiment_details' for retrieval, with long-chat handling.
@@ -1175,7 +988,7 @@ def chat_with_data():
     # Handle OPTIONS preflight request
     if request.method == 'OPTIONS':
         return {"status": "ok"}
-        
+
     payload: Dict[str, Any] = request.get_json(force=True) or {}
     query = (payload or {}).get("query", "").strip()
     if not query:
@@ -1268,10 +1081,10 @@ def diagnose_audio_file(filename: str) -> Dict[str, Any]:
     try:
         # Get basic file info
         file_info = azure_storage.get_audio_file_info(filename)
-        
+
         # Validate file format
         is_valid, validation_msg = azure_storage.validate_audio_file_format(filename)
-        
+
         # Check if transcription exists
         transcription_exists = False
         transcription_content = None
@@ -1281,7 +1094,7 @@ def diagnose_audio_file(filename: str) -> Dict[str, Any]:
             transcription_exists = transcription_content is not None
         except Exception:
             pass
-        
+
         # Check if analysis exists
         analysis_exists = False
         analysis_content = None
@@ -1291,7 +1104,7 @@ def diagnose_audio_file(filename: str) -> Dict[str, Any]:
             analysis_exists = analysis_content is not None
         except Exception:
             pass
-        
+
         return {
             "filename": filename,
             "file_info": file_info,
@@ -1309,7 +1122,7 @@ def diagnose_audio_file(filename: str) -> Dict[str, Any]:
             },
             "recommendations": []
         }
-        
+
     except Exception as e:
         return {
             "filename": filename,
@@ -1339,11 +1152,11 @@ def test_transcription(filename: str) -> Dict[str, Any]:
                     "Check if the file size is within acceptable limits"
                 ]
             }
-        
+
         # Try transcription
         print(f"Testing transcription for {filename}...")
         transcript = azure_transcription.transcribe_audio(filename)
-        
+
         if transcript.startswith("Error:") or transcript.startswith("Audio validation failed:"):
             return {
                 "filename": filename,
@@ -1356,7 +1169,7 @@ def test_transcription(filename: str) -> Dict[str, Any]:
                     "Check network connectivity to Azure services"
                 ]
             }
-        
+
         # Success
         return {
             "filename": filename,
@@ -1368,7 +1181,7 @@ def test_transcription(filename: str) -> Dict[str, Any]:
                 "File is ready for analysis and indexing"
             ]
         }
-        
+
     except Exception as e:
         return {
             "filename": filename,
@@ -1387,7 +1200,7 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
     try:
         # Check if index exists
         index_exists = azure_search.index_exists(index_name)
-        
+
         if not index_exists:
             return {
                 "index_name": index_name,
@@ -1399,13 +1212,13 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
                     "Verify Azure Search service configuration"
                 ]
             }
-        
+
         # Get document count
         doc_count = azure_search.get_index_document_count(index_name)
-        
+
         # Get sample documents
         sample_docs = azure_search.list_index_documents(index_name, top=3)
-        
+
         # Get index details
         try:
             index_client = azure_search.get_search_index_client()
@@ -1414,7 +1227,7 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
         except Exception as e:
             field_count = "unknown"
             index_details = None
-        
+
         return {
             "index_name": index_name,
             "status": "active",
@@ -1431,7 +1244,7 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
                 "Use /diagnostics/transcription/{filename} to test transcription"
             ]
         }
-        
+
     except Exception as e:
         return {
             "index_name": index_name,
@@ -1450,12 +1263,12 @@ def reindex_all_calls() -> Dict[str, Any]:
     # Handle OPTIONS preflight request
     if request.method == 'OPTIONS':
         return {"status": "ok"}
-        
+
     try:
         print("Starting re-indexing of all existing calls...")
-        
+
         # Get all calls from the container
-        calls = _list_calls_internal(refresh=True)
+        calls = list_calls()
         if not calls:
             return {
                 "status": "no_calls",
@@ -1463,36 +1276,36 @@ def reindex_all_calls() -> Dict[str, Any]:
                 "indexed_count": 0,
                 "total_calls": 0
             }
-        
+
         # Get current index document count
         current_count = azure_search.get_index_document_count("marketing_sentiment_details")
         print(f"Current index document count: {current_count}")
-        
+
         # Collect all analysis JSONs
         analysis_docs = []
         indexed_count = 0
         failed_count = 0
-        
+
         for call in calls:
             try:
                 call_id = call.get("call_id")
                 analysis = call.get("analysis")
-                
+
                 if not analysis or not isinstance(analysis, dict):
                     print(f"Skipping {call_id}: No analysis data")
                     continue
-                
+
                 # Check if this document is already in the index
                 # We'll use the call_id as a unique identifier
                 analysis_docs.append({
                     "call_id": call_id,
                     "analysis": analysis
                 })
-                
+
             except Exception as e:
                 print(f"Error processing call {call.get('call_id', 'unknown')}: {e}")
                 failed_count += 1
-        
+
         if not analysis_docs:
             return {
                 "status": "no_analyses",
@@ -1500,19 +1313,19 @@ def reindex_all_calls() -> Dict[str, Any]:
                 "indexed_count": 0,
                 "total_calls": len(calls)
             }
-        
+
         print(f"Found {len(analysis_docs)} analysis documents to index")
-        
+
         # Clear existing index and recreate with all documents
         try:
             # Delete existing index
             print("Deleting existing index to recreate with all documents...")
             azure_search.get_search_index_client().delete_index("marketing_sentiment_details")
-            
+
             # Wait for deletion to complete
             import time
             time.sleep(3)
-            
+
             # Create new index with first document as template
             if analysis_docs:
                 first_doc = analysis_docs[0]["analysis"]
@@ -1525,19 +1338,19 @@ def reindex_all_calls() -> Dict[str, Any]:
                         "total_calls": len(calls)
                     }
                 print("Index created successfully")
-            
+
             # Index all documents
             print("Indexing all analysis documents...")
             message, success = azure_search.load_json_into_azure_search(
                 "marketing_sentiment_details", 
                 [doc["analysis"] for doc in analysis_docs]
             )
-            
+
             if success:
                 # Get new document count
                 new_count = azure_search.get_index_document_count("marketing_sentiment_details")
                 indexed_count = new_count
-                
+
                 return {
                     "status": "success",
                     "message": f"Successfully re-indexed {indexed_count} documents",
@@ -1553,7 +1366,7 @@ def reindex_all_calls() -> Dict[str, Any]:
                     "indexed_count": 0,
                     "total_calls": len(calls)
                 }
-                
+
         except Exception as e:
             return {
                 "status": "error",
@@ -1561,7 +1374,7 @@ def reindex_all_calls() -> Dict[str, Any]:
                 "indexed_count": 0,
                 "total_calls": len(calls)
             }
-            
+
     except Exception as e:
         return {
             "status": "error",
@@ -1569,55 +1382,6 @@ def reindex_all_calls() -> Dict[str, Any]:
             "indexed_count": 0,
             "total_calls": 0
         }
-
-@app.route('/test-calls-internal', methods=['GET'])
-def test_calls_internal() -> Dict[str, Any]:
-    """Test endpoint to debug _list_calls_internal function"""
-    try:
-        calls = _list_calls_internal(refresh=True)
-        return {
-            "status": "ok", 
-            "calls_type": str(type(calls)),
-            "calls_length": len(calls) if isinstance(calls, list) else "not a list",
-            "first_call": calls[0] if isinstance(calls, list) and len(calls) > 0 else None
-        }
-    except Exception as e:
-        return {"status": "error", "message": str(e), "exception_type": str(type(e))}
-
-@app.route('/recompute-dashboard-summary', methods=['POST', 'OPTIONS'])
-def recompute_dashboard_summary() -> Dict[str, Any]:
-    """Force recomputation and persistence of the dashboard summary for existing calls.
-    Accepts optional query string or JSON body parameters:
-      - refresh: boolean to bypass any caches while gathering calls
-    """
-    if request.method == 'OPTIONS':
-        return {"status": "ok"}
-    try:
-        refresh = False
-        try:
-            refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
-        except Exception:
-            pass
-        
-        # Clear cache to avoid Response object issues
-        _cache_clear()
-        
-        start = time.time()
-        calls = _list_calls_internal(refresh=True)
-        print(f"DEBUG: recompute_dashboard_summary got calls of type: {type(calls)}")
-        if isinstance(calls, list):
-            print(f"DEBUG: calls is a list with {len(calls)} items")
-        else:
-            print(f"DEBUG: calls is not a list, it's {type(calls)}")
-            return {"status": "error", "message": f"calls is not a list, it's {type(calls)}"}
-        
-        summary_obj = _compute_dashboard_summary(calls)
-        persisted = _persist_summary(summary_obj)
-        took_ms = int((time.time() - start) * 1000)
-        return {"status": "ok", "persisted": bool(persisted), "took_ms": took_ms, "total_calls": len(calls)}
-    except Exception as e:
-        print(f"DEBUG: recompute_dashboard_summary exception: {e}")
-        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     app.run(debug=True)
