@@ -3,7 +3,7 @@ import json
 import os
 from datetime import datetime
 from services import azure_storage, azure_transcription, azure_oai, azure_search
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, make_response
 import json
 import requests
 from bs4 import BeautifulSoup
@@ -11,6 +11,7 @@ from openai import AzureOpenAI
 from flasgger import Swagger, swag_from
 from flask_swagger_ui import get_swaggerui_blueprint
 from flask_cors import CORS  # Import CORS
+import time
 
 app = Flask(__name__)
 
@@ -235,6 +236,141 @@ def _cache_get(key: str, ttl_seconds: int) -> Any | None:
 
 def _cache_set(key: str, value: Any) -> None:
     _CACHE[key] = {"data": value, "ts": datetime.utcnow().timestamp()}
+
+# --------------------------
+# Summary precompute persisted in Blob Storage
+# --------------------------
+SUMMARY_BLOB_PREFIX = "analytics"
+SUMMARY_BLOB_NAME = "dashboard-summary.json"
+
+def _compute_dashboard_summary(calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    summaries: List[str] = []
+    sentiment_scores: List[float] = []
+    sentiment_labels: Dict[str, int] = {}
+    dispositions: Dict[str, int] = {}
+    categories: Dict[str, int] = {}
+    resolution_status: Dict[str, int] = {}
+    subjects: Dict[str, int] = {}
+    services: Dict[str, int] = {}
+    agent_professionalism: Dict[str, int] = {}
+    resolved_count = 0
+    aht_values: List[float] = []
+    talk_values: List[float] = []
+    hold_values: List[float] = []
+
+    for c in calls:
+        a = c.get("analysis") or {}
+        if isinstance(a, dict) and a.get("summary"):
+            summaries.append(a["summary"])
+        s = a.get("sentiment", {})
+        if isinstance(s, dict):
+            score = s.get("score")
+            try:
+                sentiment_scores.append(float(score))
+            except Exception:
+                pass
+        disp = a.get("disposition") or a.get("Disposition")
+        if isinstance(disp, dict):
+            dscore = disp.get("score")
+            if dscore:
+                dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
+        resolved = a.get("resolved")
+        if isinstance(resolved, dict) and resolved.get("score") is True:
+            resolved_count += 1
+        structured = _extract_structured_fields(a)
+        if structured.get("customer_sentiment"):
+            lbl = str(structured["customer_sentiment"]).strip()
+            sentiment_labels[lbl] = sentiment_labels.get(lbl, 0) + 1
+        if structured.get("call_categorization"):
+            cat = str(structured["call_categorization"]).strip()
+            categories[cat] = categories.get(cat, 0) + 1
+        if structured.get("resolution_status"):
+            rs = str(structured["resolution_status"]).strip()
+            resolution_status[rs] = resolution_status.get(rs, 0) + 1
+        if structured.get("main_subject"):
+            subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
+        if structured.get("services"):
+            sv = structured["services"]
+            if isinstance(sv, str):
+                parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
+                for p in parts:
+                    services[p] = services.get(p, 0) + 1
+            elif isinstance(sv, list):
+                for p in sv:
+                    services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
+        if structured.get("agent_professionalism"):
+            att = str(structured.get("agent_professionalism")).strip()
+            if att:
+                agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
+        aht = structured.get("aht")
+        if isinstance(aht, dict):
+            try:
+                aht_values.append(float(aht.get("score")))
+            except Exception:
+                pass
+        if structured.get("talk_time_seconds") is not None:
+            try:
+                talk_values.append(float(structured.get("talk_time_seconds")))
+            except Exception:
+                pass
+        if structured.get("hold_time_seconds") is not None:
+            try:
+                hold_values.append(float(structured.get("hold_time_seconds")))
+            except Exception:
+                pass
+
+    overall_insights = None
+    if summaries:
+        try:
+            overall_insights = azure_oai.get_insights(summaries)
+        except Exception:
+            overall_insights = None
+
+    total = len(calls)
+    avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else None
+    avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
+    avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
+    avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
+
+    return {
+        "total_calls": total,
+        "avg_sentiment": avg_sentiment,
+        "sentiment_labels": sentiment_labels,
+        "dispositions": dispositions,
+        "categories": categories,
+        "resolution_status": resolution_status,
+        "subjects": subjects,
+        "services": services,
+        "agent_professionalism": agent_professionalism,
+        "resolved_rate": (resolved_count / total) if total else None,
+        "avg_aht_seconds": avg_aht,
+        "avg_talk_seconds": avg_talk,
+        "avg_hold_seconds": avg_hold,
+        "overall_insights": overall_insights,
+    }
+
+def _load_persisted_summary():
+    try:
+        content = azure_storage.read_blob(SUMMARY_BLOB_NAME, SUMMARY_BLOB_PREFIX)
+        if not content:
+            return None, None, None
+        # get blob props for ETag / Last-Modified
+        client = azure_storage.get_blob_client(SUMMARY_BLOB_NAME, SUMMARY_BLOB_PREFIX)
+        props = client.get_blob_properties()
+        etag = getattr(props, 'etag', None)
+        last_modified = getattr(props, 'last_modified', None)
+        return json.loads(content), etag, last_modified
+    except Exception:
+        return None, None, None
+
+def _persist_summary(obj: Dict[str, Any]):
+    try:
+        azure_storage.upload_blob(json.dumps(obj), SUMMARY_BLOB_NAME, SUMMARY_BLOB_PREFIX)
+        # Invalidate in-process cache
+        _CACHE.pop("dashboard_summary", None)
+        return True
+    except Exception:
+        return False
 
 
 
@@ -595,6 +731,15 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 "search_indexed": False,
             })
     
+    # After processing all files, recompute and persist dashboard summary in background-safe manner
+    try:
+        calls = list_calls()
+        summary_obj = _compute_dashboard_summary(calls)
+        _persist_summary(summary_obj)
+        print("Dashboard summary recomputed and persisted.")
+    except Exception as e:
+        print(f"Warning: Failed to recompute/persist summary: {e}")
+    
     return {"status": "ok", "processed": results}
 
 
@@ -624,9 +769,12 @@ def list_calls() -> List[Dict[str, Any]]:
 
         cache_key = f"calls:page={page}:size={page_size}:light={int(light)}"
         if not refresh:
-            cached = _cache_get(cache_key, ttl_seconds=60)
+            cached = _cache_get(cache_key, ttl_seconds=600)
             if cached is not None:
-                return cached
+                # add short-lived cache headers for CDN/browser
+                resp = make_response(jsonify(cached), 200)
+                resp.headers['Cache-Control'] = 'public, max-age=30'
+                return resp
 
         # Ensure container exists
         azure_storage.ensure_container_exists(azure_storage.DEFAULT_CONTAINER)
@@ -705,7 +853,9 @@ def list_calls() -> List[Dict[str, Any]]:
             })
 
         _cache_set(cache_key, entries)
-        return entries
+        resp = make_response(jsonify(entries), 200)
+        resp.headers['Cache-Control'] = 'public, max-age=30'
+        return resp
     except Exception:
         # Fallback to simpler listing to avoid 500
         try:
@@ -743,11 +893,43 @@ def get_call(call_id: str) -> Dict[str, Any]:
 
 @app.route('/dashboard/summary', methods=['GET'])
 def dashboard_summary() -> Dict[str, Any]:
-    # cache summary for a short time window to avoid re-computation on navigation
-    cached = _cache_get("dashboard_summary", ttl_seconds=60)
-    if cached is not None:
-        return cached
+    # Try persisted blob summary first for fast loads
+    persisted, etag, last_modified = _load_persisted_summary()
+    if persisted is not None:
+        # Handle conditional requests with If-None-Match / If-Modified-Since
+        inm = request.headers.get('If-None-Match')
+        ims = request.headers.get('If-Modified-Since')
+        if etag and inm and inm == etag:
+            resp = make_response('', 304)
+            if etag:
+                resp.headers['ETag'] = etag
+            if last_modified:
+                resp.headers['Last-Modified'] = last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT')
+            resp.headers['Cache-Control'] = 'public, max-age=60'
+            return resp
+        if last_modified and ims:
+            try:
+                from email.utils import parsedate_to_datetime
+                ims_dt = parsedate_to_datetime(ims)
+                if ims_dt >= last_modified:
+                    resp = make_response('', 304)
+                    if etag:
+                        resp.headers['ETag'] = etag
+                    resp.headers['Last-Modified'] = last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT')
+                    resp.headers['Cache-Control'] = 'public, max-age=60'
+                    return resp
+            except Exception:
+                pass
+        # Return cached summary with caching headers
+        resp = make_response(jsonify(persisted), 200)
+        if etag:
+            resp.headers['ETag'] = etag
+        if last_modified:
+            resp.headers['Last-Modified'] = last_modified.strftime('%a, %d %b %Y %H:%M:%S GMT')
+        resp.headers['Cache-Control'] = 'public, max-age=60'
+        return resp
 
+    # Fallback: compute live (rare path)
     calls = list_calls()
     summaries: List[str] = []
     sentiment_scores: List[float] = []
@@ -860,8 +1042,10 @@ def dashboard_summary() -> Dict[str, Any]:
         "avg_hold_seconds": avg_hold,
         "overall_insights": overall_insights,
     }
-    _cache_set("dashboard_summary", result)
-    return result
+    _persist_summary(result)
+    resp = make_response(jsonify(result), 200)
+    resp.headers['Cache-Control'] = 'public, max-age=60'
+    return resp
 
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
@@ -1358,6 +1542,31 @@ def reindex_all_calls() -> Dict[str, Any]:
             "indexed_count": 0,
             "total_calls": 0
         }
+
+@app.route('/recompute-dashboard-summary', methods=['POST', 'OPTIONS'])
+def recompute_dashboard_summary() -> Dict[str, Any]:
+    """Force recomputation and persistence of the dashboard summary for existing calls.
+    Accepts optional query string or JSON body parameters:
+      - refresh: boolean to bypass any caches while gathering calls
+    """
+    if request.method == 'OPTIONS':
+        return {"status": "ok"}
+    try:
+        refresh = False
+        try:
+            refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
+        except Exception:
+            pass
+        start = time.time()
+        calls = list_calls()
+        if isinstance(calls, tuple):
+            calls = calls[0]
+        summary_obj = _compute_dashboard_summary(calls)
+        persisted = _persist_summary(summary_obj)
+        took_ms = int((time.time() - start) * 1000)
+        return {"status": "ok", "persisted": bool(persisted), "took_ms": took_ms, "total_calls": len(calls)}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     app.run(debug=True)
