@@ -822,22 +822,79 @@ def _list_calls_internal(page: int = 1, page_size: int = 100, light: bool = Fals
     # Use simplified version for now to debug
     return _list_calls_simple()
 
-@app.route('/calls', methods=['GET'])
-def list_calls() -> List[Dict[str, Any]]:
-    """Public endpoint for listing calls with HTTP cache headers"""
+
+def _ensure_calls_list(calls) -> List[Dict[str, Any]]:
+    """
+    Coerce various possible return types into a list of call dicts.
+    - If `calls` is already a list, return it.
+    - If `calls` is a Flask Response, try to parse JSON and return list or the "processed" field if present.
+    - If `calls` is a dict with a 'processed' list, return that.
+    - Otherwise return an empty list.
+    """
+    if isinstance(calls, list):
+        return calls
+
+    # Flask Response handling
     try:
-        # Query params for performance controls
+        if isinstance(calls, Response):
+            possible = calls.get_json(silent=True)
+            if isinstance(possible, list):
+                return possible
+            if isinstance(possible, dict) and isinstance(possible.get("processed"), list):
+                return possible.get("processed")
+            # fallback: try raw body parse
+            data_text = calls.get_data(as_text=True) or ""
+            try:
+                parsed = json.loads(data_text)
+                if isinstance(parsed, list):
+                    return parsed
+                if isinstance(parsed, dict) and isinstance(parsed.get("processed"), list):
+                    return parsed.get("processed")
+            except Exception:
+                pass
+            # nothing parseable -> empty
+            print("DEBUG: _ensure_calls_list: Response body not parseable as list; returning []")
+            return []
+
+        # dict with processed field
+        if isinstance(calls, dict):
+            if isinstance(calls.get("processed"), list):
+                return calls.get("processed")
+            # sometimes the payload is a single object representing a call -> wrap it
+            # but prefer to return [] to avoid incorrect shapes
+            print("DEBUG: _ensure_calls_list: dict without 'processed' list; returning []")
+            return []
+
+    except Exception as e:
+        print(f"DEBUG: _ensure_calls_list exception while coercing: {e}")
+
+    # Unknown type
+    print(f"DEBUG: _ensure_calls_list coercing unexpected type {type(calls)} -> []")
+    return []
+
+
+@app.route('/calls', methods=['GET'])
+def list_calls() -> Response:
+    """Public endpoint for listing calls with HTTP cache headers (defensive against unexpected return shapes)."""
+    try:
         page = max(1, int(request.args.get('page', '1') or '1'))
         page_size = max(1, min(200, int(request.args.get('page_size', '100') or '100')))
         light = request.args.get('light', '0') in ('1', 'true', 'True')
         refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
-        
-        entries = _list_calls_internal(page, page_size, light, refresh)
+
+        # Use internal list function (which should return a Python list)
+        raw_entries = _list_calls_internal(page=page, page_size=page_size, light=light, refresh=refresh)
+
+        # Defensive coercion: ensure entries is list
+        entries = _ensure_calls_list(raw_entries)
+
         resp = make_response(jsonify(entries), 200)
         resp.headers['Cache-Control'] = 'public, max-age=30'
         return resp
     except Exception as e:
+        print(f"ERROR in /calls endpoint: {e}")
         return make_response(jsonify({"error": str(e)}), 500)
+
 
 
 @app.route('/calls/<call_id>', methods=['GET'])
@@ -867,11 +924,11 @@ def get_call(call_id: str) -> Dict[str, Any]:
 
 
 @app.route('/dashboard/summary', methods=['GET'])
-def dashboard_summary() -> Dict[str, Any]:
+def dashboard_summary() -> Response:
+    """Return persisted dashboard summary or compute live; defensive about calls list type."""
     # Try persisted blob summary first for fast loads
     persisted, etag, last_modified = _load_persisted_summary()
     if persisted is not None:
-        # Handle conditional requests with If-None-Match / If-Modified-Since
         inm = request.headers.get('If-None-Match')
         ims = request.headers.get('If-Modified-Since')
         if etag and inm and inm == etag:
@@ -905,7 +962,14 @@ def dashboard_summary() -> Dict[str, Any]:
         return resp
 
     # Fallback: compute live (rare path)
-    calls = _list_calls_internal(refresh=True)
+    raw_calls = _list_calls_internal(refresh=True)
+    calls = _ensure_calls_list(raw_calls)
+
+    # Defensive: ensure a list type
+    if not isinstance(calls, list):
+        print(f"DEBUG: dashboard_summary expected a list but got {type(calls)}; using empty list")
+        calls = []
+
     summaries: List[str] = []
     sentiment_scores: List[float] = []
     sentiment_labels: Dict[str, int] = {}
@@ -923,8 +987,7 @@ def dashboard_summary() -> Dict[str, Any]:
     for c in calls:
         a = c.get("analysis") or {}
         if isinstance(a, dict) and a.get("summary"):
-            summaries.append(a["summary"]) 
-        # sentiment numeric (1-5)
+            summaries.append(a["summary"])
         s = a.get("sentiment", {})
         if isinstance(s, dict):
             score = s.get("score")
@@ -932,18 +995,15 @@ def dashboard_summary() -> Dict[str, Any]:
                 sentiment_scores.append(float(score))
             except Exception:
                 pass
-        # disposition counts
         disp = a.get("disposition") or a.get("Disposition")
         if isinstance(disp, dict):
             dscore = disp.get("score")
             if dscore:
                 dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
-        # resolved
         resolved = a.get("resolved")
         if isinstance(resolved, dict) and resolved.get("score") is True:
             resolved_count += 1
 
-        # structured insights
         structured = _extract_structured_fields(a)
         if structured.get("customer_sentiment"):
             lbl = str(structured["customer_sentiment"]).strip()
@@ -957,7 +1017,6 @@ def dashboard_summary() -> Dict[str, Any]:
         if structured.get("main_subject"):
             subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
         if structured.get("services"):
-            # split on comma or semicolon into multiple services
             sv = structured["services"]
             if isinstance(sv, str):
                 parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
@@ -966,12 +1025,10 @@ def dashboard_summary() -> Dict[str, Any]:
             elif isinstance(sv, list):
                 for p in sv:
                     services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
-        # Agent professionalism/attitude histogram
         if structured.get("agent_professionalism"):
             att = str(structured.get("agent_professionalism")).strip()
             if att:
                 agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
-        # AHT and times
         aht = structured.get("aht")
         if isinstance(aht, dict):
             try:
@@ -1017,44 +1074,44 @@ def dashboard_summary() -> Dict[str, Any]:
         "avg_hold_seconds": avg_hold,
         "overall_insights": overall_insights,
     }
-    _persist_summary(result)
+
+    # Persist computed summary for faster future loads
+    try:
+        _persist_summary(result)
+    except Exception as e:
+        print(f"Warning: _persist_summary failed: {e}")
+
     resp = make_response(jsonify(result), 200)
     resp.headers['Cache-Control'] = 'public, max-age=60'
     return resp
 
+
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
-    """Get AI-generated comprehensive insights from all call summaries"""
+    """Get AI-generated comprehensive insights from all call summaries (defensive against wrong types)."""
     try:
-        calls = _list_calls_internal(refresh=True)
-        summaries: List[str] = []
-        
+        raw_calls = _list_calls_internal(refresh=True)
+        calls = _ensure_calls_list(raw_calls)
         print(f"DEBUG: Found {len(calls)} total calls")
-        
-        # Collect all call summaries (both top-level and nested)
+
+        summaries: List[str] = []
         for c in calls:
             a = c.get("analysis") or {}
             if isinstance(a, dict):
-                # Try top-level summary first
                 if a.get("summary"):
                     summaries.append(a["summary"])
                     print(f"DEBUG: Added top-level summary for call {c.get('call_id', 'unknown')}")
-                # Try nested summary as fallback
-                elif a.get("Call Generated Insights", {}).get("summary"):
+                elif isinstance(a.get("Call Generated Insights"), dict) and a["Call Generated Insights"].get("summary"):
                     summaries.append(a["Call Generated Insights"]["summary"])
                     print(f"DEBUG: Added nested summary for call {c.get('call_id', 'unknown')}")
                 else:
                     print(f"DEBUG: No summary found for call {c.get('call_id', 'unknown')}")
-        
+
         print(f"DEBUG: Collected {len(summaries)} summaries out of {len(calls)} calls")
-        
-        # Generate comprehensive insights
+
         comprehensive_insights = None
         if summaries:
             try:
-                print(f"DEBUG: Generating insights from {len(summaries)} summaries")
-                
-                # Enhanced prompt for better insights
                 summary_prompt = """
                 You are an expert call center analyst. Based on the following call summaries, provide a comprehensive analysis that includes:
 
@@ -1084,27 +1141,23 @@ def get_insights() -> Dict[str, Any]:
                 - Specific suggestions for improvement
                 - Process enhancements
                 - Training needs
-
-                Write this as a professional, well-structured analysis with clear sections and bullet points where appropriate. Focus on providing actionable insights that management can use to improve call center operations.
                 """
-                
                 comprehensive_insights = azure_oai.call_llm(summary_prompt, "\n\n".join(summaries))
-                print(f"DEBUG: Successfully generated comprehensive insights")
-                
+                print("DEBUG: Successfully generated comprehensive insights")
             except Exception as e:
                 print(f"ERROR generating insights: {e}")
                 comprehensive_insights = f"Error generating insights: {str(e)}"
         else:
             print("DEBUG: No summaries found to generate insights from")
             comprehensive_insights = "No insights available yet. Please upload some audio files to generate insights."
-        
+
         return {
             "status": "ok",
             "comprehensive_insights": comprehensive_insights,
             "total_calls": len(calls),
             "summaries_found": len(summaries)
         }
-        
+
     except Exception as e:
         print(f"ERROR in /insights endpoint: {e}")
         return {
@@ -1114,7 +1167,6 @@ def get_insights() -> Dict[str, Any]:
             "total_calls": 0,
             "summaries_found": 0
         }
-
 @app.route('/chat', methods=['POST', 'OPTIONS'])
 def chat_with_data():
     """Chat with calls using Azure AI Search index 'marketing_sentiment_details' for retrieval, with long-chat handling.
