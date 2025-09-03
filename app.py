@@ -487,33 +487,33 @@ def _extract_structured_fields(analysis: Any) -> Dict[str, Any]:
 @app.route('/upload-complete', methods=['POST', 'OPTIONS'])
 def upload_complete_pipeline() -> Dict[str, Any]:
     """Complete pipeline: Upload → Transcribe → Analyze → Index for search"""
-
+    
     # Handle OPTIONS preflight request
     if request.method == 'OPTIONS':
         return {"status": "ok"}
-
+    
     results: List[Dict[str, Any]] = []
-
+    
     # Get files from Flask request
     if 'files' not in request.files:
         return {"status": "error", "message": "No files provided", "processed": []}
-
+    
     files = request.files.getlist('files')
-
+    
     for uf in files:
         try:
             filename = uf.filename.replace(" ", "_")
             content = uf.read()
-
+            
             # Step 1: Upload audio to blob storage
             print(f"Processing {filename}: Step 1 - Uploading to blob storage...")
             azure_storage.upload_blob(content, filename, prefix=azure_storage.AUDIO_FOLDER)
             name_no_ext = filename.rsplit(".", 1)[0]
-
+            
             # Step 2: Transcribe audio using Azure Speech services
             print(f"Processing {filename}: Step 2 - Transcribing with Azure Speech...")
             transcript = azure_transcription.transcribe_audio(filename)
-
+            
             # Check if transcription failed
             if transcript.startswith("Error:") or transcript.startswith("Audio validation failed:"):
                 print(f"Transcription failed for {filename}: {transcript}")
@@ -523,16 +523,16 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                     "search_indexed": False,
                 })
                 continue
-
+                
             # Save successful transcription
             azure_storage.upload_transcription_to_blob(name_no_ext, transcript)
             print(f"Processing {filename}: Step 2 - Transcription completed successfully")
-
+            
             # Step 3: Analyze transcript with GenAI using static system prompt
             print(f"Processing {filename}: Step 3 - Analyzing with GenAI...")
             analysis_raw = azure_oai.call_llm(SYSTEM_PROMPT_DEFAULT, transcript)
             analysis_json = _parse_json_maybe(analysis_raw)
-
+            
             # Save analysis to both default and persona folders for compatibility
             azure_storage.upload_blob(
                 json.dumps(analysis_json),
@@ -545,14 +545,14 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 prefix=azure_storage.LLM_ANALYSIS_FOLDER,
             )
             print(f"Processing {filename}: Step 3 - Analysis completed successfully")
-
+            
             # Step 4: Update Azure AI Search index for chat functionality
             print(f"Processing {filename}: Step 4 - Indexing for search...")
             try:
                 # Get current document count before indexing
                 current_count = azure_search.get_index_document_count("marketing_sentiment_details")
                 print(f"Current index document count: {current_count}")
-
+                
                 # Load the analysis JSON into the marketing_sentiment_details index
                 message, success = azure_search.load_json_into_azure_search(
                     "marketing_sentiment_details", 
@@ -570,21 +570,21 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                         print(f"Successfully added {new_count - current_count} new document(s) to search index")
                     else:
                         print(f"Document count unchanged. Document may have been updated rather than added.")
-
+                    
                     print(f"Processing {filename}: Step 4 - Search indexing completed successfully")
             except Exception as e:
                 print(f"Warning: Search indexing failed for {name_no_ext}: {e}")
                 search_indexed = False
-
+            
             results.append({
                 "file": filename,
                 "transcription_blob": f"{azure_storage.TRANSCRIPTION_FOLDER}/{name_no_ext}.txt",
                 "analysis_blob": f"{azure_storage.LLM_ANALYSIS_FOLDER}/persona/{name_no_ext}.json",
                 "search_indexed": search_indexed,
             })
-
+            
             print(f"Processing {filename}: All steps completed successfully")
-
+            
         except Exception as e:
             # Log error but continue with other files
             error_msg = f"Error processing {uf.filename}: {str(e)}"
@@ -594,7 +594,7 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 "error": error_msg,
                 "search_indexed": False,
             })
-
+    
     return {"status": "ok", "processed": results}
 
 
@@ -624,7 +624,7 @@ def list_calls() -> List[Dict[str, Any]]:
 
         cache_key = f"calls:page={page}:size={page_size}:light={int(light)}"
         if not refresh:
-            cached = _cache_get(cache_key, ttl_seconds=3600)
+            cached = _cache_get(cache_key, ttl_seconds=60)
             if cached is not None:
                 return cached
 
@@ -640,7 +640,6 @@ def list_calls() -> List[Dict[str, Any]]:
             # Fallback: scan entire container for audio extensions
             audio_blobs = [b for b in container.list_blobs() if any(b.name.lower().endswith(ext) for ext in audio_exts)]
 
-        entries: List[Dict[str, Any]] = []
         # Build a minimal index first: (call_id, audio_name, uploaded_at, blob)
         indexed: List[Dict[str, Any]] = []
         seen_call_ids: set[str] = set()
@@ -651,24 +650,6 @@ def list_calls() -> List[Dict[str, Any]]:
             if call_id in seen_call_ids:
                 continue
             seen_call_ids.add(call_id)
-
-            # Prefer persona analysis folder
-            parsed, first_analysis_path = _persona_analysis_for_call(call_id)
-            if not parsed:
-                # Fallback: any analysis folder
-                parsed, first_analysis_path = _first_analysis_for_call(call_id)
-            category, attitude = _derive_category_and_attitude(parsed)
-            # If still missing, try a second pass: look for JSON named exactly by audio base even if extension differs
-            if (category is None or attitude is None) and not parsed:
-                # attempt: if audio file has dashes or underscores variations, try normalized id
-                norm_id = call_id.replace(" ", "_")
-                if norm_id != call_id:
-                    parsed, first_analysis_path = _persona_analysis_for_call(norm_id)
-                    if not parsed:
-                        parsed, first_analysis_path = _first_analysis_for_call(norm_id)
-                    c2, a2 = _derive_category_and_attitude(parsed)
-                    category = category or c2
-                    attitude = attitude or a2
             created = getattr(blob, "creation_time", None) or getattr(blob, "last_modified", None)
             indexed.append({
                 "call_id": call_id,
@@ -716,8 +697,6 @@ def list_calls() -> List[Dict[str, Any]]:
             entries.append({
                 "audio_name": audio_name,
                 "call_id": call_id,
-                "uploaded_at": created.isoformat() if isinstance(created, datetime) else None,
-                "analysis": parsed,
                 "uploaded_at": uploaded_at,
                 "analysis": None if light else parsed,
                 "call_category": category,
@@ -725,8 +704,6 @@ def list_calls() -> List[Dict[str, Any]]:
                 "analysis_file": first_analysis_path,
             })
 
-        # newest first
-        entries.sort(key=lambda x: x.get("uploaded_at") or "", reverse=True)
         _cache_set(cache_key, entries)
         return entries
     except Exception:
@@ -767,7 +744,7 @@ def get_call(call_id: str) -> Dict[str, Any]:
 @app.route('/dashboard/summary', methods=['GET'])
 def dashboard_summary() -> Dict[str, Any]:
     # cache summary for a short time window to avoid re-computation on navigation
-    cached = _cache_get("dashboard_summary", ttl_seconds=3600)
+    cached = _cache_get("dashboard_summary", ttl_seconds=60)
     if cached is not None:
         return cached
 
@@ -867,7 +844,6 @@ def dashboard_summary() -> Dict[str, Any]:
     avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
     avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
     avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
-    return {
     result = {
         "total_calls": total,
         "avg_sentiment": avg_sentiment,
@@ -893,9 +869,9 @@ def get_insights() -> Dict[str, Any]:
     try:
         calls = list_calls()
         summaries: List[str] = []
-
+        
         print(f"DEBUG: Found {len(calls)} total calls")
-
+        
         # Collect all call summaries (both top-level and nested)
         for c in calls:
             a = c.get("analysis") or {}
@@ -910,15 +886,15 @@ def get_insights() -> Dict[str, Any]:
                     print(f"DEBUG: Added nested summary for call {c.get('call_id', 'unknown')}")
                 else:
                     print(f"DEBUG: No summary found for call {c.get('call_id', 'unknown')}")
-
+        
         print(f"DEBUG: Collected {len(summaries)} summaries out of {len(calls)} calls")
-
+        
         # Generate comprehensive insights
         comprehensive_insights = None
         if summaries:
             try:
                 print(f"DEBUG: Generating insights from {len(summaries)} summaries")
-
+                
                 # Enhanced prompt for better insights
                 summary_prompt = """
                 You are an expert call center analyst. Based on the following call summaries, provide a comprehensive analysis that includes:
@@ -952,24 +928,24 @@ def get_insights() -> Dict[str, Any]:
 
                 Write this as a professional, well-structured analysis with clear sections and bullet points where appropriate. Focus on providing actionable insights that management can use to improve call center operations.
                 """
-
+                
                 comprehensive_insights = azure_oai.call_llm(summary_prompt, "\n\n".join(summaries))
                 print(f"DEBUG: Successfully generated comprehensive insights")
-
+                
             except Exception as e:
                 print(f"ERROR generating insights: {e}")
                 comprehensive_insights = f"Error generating insights: {str(e)}"
         else:
             print("DEBUG: No summaries found to generate insights from")
             comprehensive_insights = "No insights available yet. Please upload some audio files to generate insights."
-
+        
         return {
             "status": "ok",
             "comprehensive_insights": comprehensive_insights,
             "total_calls": len(calls),
             "summaries_found": len(summaries)
         }
-
+        
     except Exception as e:
         print(f"ERROR in /insights endpoint: {e}")
         return {
@@ -988,7 +964,7 @@ def chat_with_data():
     # Handle OPTIONS preflight request
     if request.method == 'OPTIONS':
         return {"status": "ok"}
-
+        
     payload: Dict[str, Any] = request.get_json(force=True) or {}
     query = (payload or {}).get("query", "").strip()
     if not query:
@@ -1081,10 +1057,10 @@ def diagnose_audio_file(filename: str) -> Dict[str, Any]:
     try:
         # Get basic file info
         file_info = azure_storage.get_audio_file_info(filename)
-
+        
         # Validate file format
         is_valid, validation_msg = azure_storage.validate_audio_file_format(filename)
-
+        
         # Check if transcription exists
         transcription_exists = False
         transcription_content = None
@@ -1094,7 +1070,7 @@ def diagnose_audio_file(filename: str) -> Dict[str, Any]:
             transcription_exists = transcription_content is not None
         except Exception:
             pass
-
+        
         # Check if analysis exists
         analysis_exists = False
         analysis_content = None
@@ -1104,7 +1080,7 @@ def diagnose_audio_file(filename: str) -> Dict[str, Any]:
             analysis_exists = analysis_content is not None
         except Exception:
             pass
-
+        
         return {
             "filename": filename,
             "file_info": file_info,
@@ -1122,7 +1098,7 @@ def diagnose_audio_file(filename: str) -> Dict[str, Any]:
             },
             "recommendations": []
         }
-
+        
     except Exception as e:
         return {
             "filename": filename,
@@ -1152,11 +1128,11 @@ def test_transcription(filename: str) -> Dict[str, Any]:
                     "Check if the file size is within acceptable limits"
                 ]
             }
-
+        
         # Try transcription
         print(f"Testing transcription for {filename}...")
         transcript = azure_transcription.transcribe_audio(filename)
-
+        
         if transcript.startswith("Error:") or transcript.startswith("Audio validation failed:"):
             return {
                 "filename": filename,
@@ -1169,7 +1145,7 @@ def test_transcription(filename: str) -> Dict[str, Any]:
                     "Check network connectivity to Azure services"
                 ]
             }
-
+        
         # Success
         return {
             "filename": filename,
@@ -1181,7 +1157,7 @@ def test_transcription(filename: str) -> Dict[str, Any]:
                 "File is ready for analysis and indexing"
             ]
         }
-
+        
     except Exception as e:
         return {
             "filename": filename,
@@ -1200,7 +1176,7 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
     try:
         # Check if index exists
         index_exists = azure_search.index_exists(index_name)
-
+        
         if not index_exists:
             return {
                 "index_name": index_name,
@@ -1212,13 +1188,13 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
                     "Verify Azure Search service configuration"
                 ]
             }
-
+        
         # Get document count
         doc_count = azure_search.get_index_document_count(index_name)
-
+        
         # Get sample documents
         sample_docs = azure_search.list_index_documents(index_name, top=3)
-
+        
         # Get index details
         try:
             index_client = azure_search.get_search_index_client()
@@ -1227,7 +1203,7 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
         except Exception as e:
             field_count = "unknown"
             index_details = None
-
+        
         return {
             "index_name": index_name,
             "status": "active",
@@ -1244,7 +1220,7 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
                 "Use /diagnostics/transcription/{filename} to test transcription"
             ]
         }
-
+        
     except Exception as e:
         return {
             "index_name": index_name,
@@ -1263,10 +1239,10 @@ def reindex_all_calls() -> Dict[str, Any]:
     # Handle OPTIONS preflight request
     if request.method == 'OPTIONS':
         return {"status": "ok"}
-
+        
     try:
         print("Starting re-indexing of all existing calls...")
-
+        
         # Get all calls from the container
         calls = list_calls()
         if not calls:
@@ -1276,36 +1252,36 @@ def reindex_all_calls() -> Dict[str, Any]:
                 "indexed_count": 0,
                 "total_calls": 0
             }
-
+        
         # Get current index document count
         current_count = azure_search.get_index_document_count("marketing_sentiment_details")
         print(f"Current index document count: {current_count}")
-
+        
         # Collect all analysis JSONs
         analysis_docs = []
         indexed_count = 0
         failed_count = 0
-
+        
         for call in calls:
             try:
                 call_id = call.get("call_id")
                 analysis = call.get("analysis")
-
+                
                 if not analysis or not isinstance(analysis, dict):
                     print(f"Skipping {call_id}: No analysis data")
                     continue
-
+                
                 # Check if this document is already in the index
                 # We'll use the call_id as a unique identifier
                 analysis_docs.append({
                     "call_id": call_id,
                     "analysis": analysis
                 })
-
+                
             except Exception as e:
                 print(f"Error processing call {call.get('call_id', 'unknown')}: {e}")
                 failed_count += 1
-
+        
         if not analysis_docs:
             return {
                 "status": "no_analyses",
@@ -1313,19 +1289,19 @@ def reindex_all_calls() -> Dict[str, Any]:
                 "indexed_count": 0,
                 "total_calls": len(calls)
             }
-
+        
         print(f"Found {len(analysis_docs)} analysis documents to index")
-
+        
         # Clear existing index and recreate with all documents
         try:
             # Delete existing index
             print("Deleting existing index to recreate with all documents...")
             azure_search.get_search_index_client().delete_index("marketing_sentiment_details")
-
+            
             # Wait for deletion to complete
             import time
             time.sleep(3)
-
+            
             # Create new index with first document as template
             if analysis_docs:
                 first_doc = analysis_docs[0]["analysis"]
@@ -1338,19 +1314,19 @@ def reindex_all_calls() -> Dict[str, Any]:
                         "total_calls": len(calls)
                     }
                 print("Index created successfully")
-
+            
             # Index all documents
             print("Indexing all analysis documents...")
             message, success = azure_search.load_json_into_azure_search(
                 "marketing_sentiment_details", 
                 [doc["analysis"] for doc in analysis_docs]
             )
-
+            
             if success:
                 # Get new document count
                 new_count = azure_search.get_index_document_count("marketing_sentiment_details")
                 indexed_count = new_count
-
+                
                 return {
                     "status": "success",
                     "message": f"Successfully re-indexed {indexed_count} documents",
@@ -1366,7 +1342,7 @@ def reindex_all_calls() -> Dict[str, Any]:
                     "indexed_count": 0,
                     "total_calls": len(calls)
                 }
-
+                
         except Exception as e:
             return {
                 "status": "error",
@@ -1374,7 +1350,7 @@ def reindex_all_calls() -> Dict[str, Any]:
                 "indexed_count": 0,
                 "total_calls": len(calls)
             }
-
+            
     except Exception as e:
         return {
             "status": "error",
