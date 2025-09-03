@@ -35,7 +35,35 @@ CORS(
     supports_credentials=True,
     expose_headers=["Content-Disposition"],
 )
-
+# Fallback: ensure CORS headers are always present for allowed origins (incl. on errors)
+@app.after_request
+def add_cors_headers(response):
+    try:
+        origin = request.headers.get("Origin", "")
+        allowed_origins = {
+            "https://green-smoke-05633cb03-preview.westeurope.2.azurestaticapps.net",
+            "http://localhost:3000",
+            "http://localhost:5173",
+        }
+        if origin in allowed_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Vary"] = ", ".join(filter(None, [response.headers.get("Vary"), "Origin"]))
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD"
+            # Echo requested headers if present; otherwise allow common ones
+            req_headers = request.headers.get("Access-Control-Request-Headers")
+            if req_headers:
+                response.headers["Access-Control-Allow-Headers"] = req_headers
+            else:
+                response.headers["Access-Control-Allow-Headers"] = \
+                    "Content-Type, Authorization, Accept, Cache-Control, X-Requested-With, Origin, Accept-Language"
+            # Expose headers used by downloads
+            response.headers["Access-Control-Expose-Headers"] = ", ".join(
+                sorted(set([*(response.headers.get("Access-Control-Expose-Headers", "").split(",") or []), "Content-Disposition"]))
+            ).strip(", ")
+    except Exception:
+        pass
+    return response
 # Health check endpoint
 @app.route('/', methods=['GET'])
 def read_root():
