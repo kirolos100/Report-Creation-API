@@ -232,10 +232,18 @@ def _cache_get(key: str, ttl_seconds: int) -> Any | None:
     if (datetime.utcnow().timestamp() - ts) > ttl_seconds:
         _CACHE.pop(key, None)
         return None
-    return entry.get("data")
+    data = entry.get("data")
+    print(f"DEBUG: _cache_get returning data of type: {type(data)}")
+    return data
 
 def _cache_set(key: str, value: Any) -> None:
+    print(f"DEBUG: _cache_set storing value of type: {type(value)}")
     _CACHE[key] = {"data": value, "ts": datetime.utcnow().timestamp()}
+
+def _cache_clear() -> None:
+    """Clear all cached data"""
+    _CACHE.clear()
+    print("DEBUG: Cache cleared")
 
 # --------------------------
 # Summary precompute persisted in Blob Storage
@@ -244,6 +252,9 @@ SUMMARY_BLOB_PREFIX = "analytics"
 SUMMARY_BLOB_NAME = "dashboard-summary.json"
 
 def _compute_dashboard_summary(calls: List[Dict[str, Any]]) -> Dict[str, Any]:
+    print(f"DEBUG: _compute_dashboard_summary called with calls of type: {type(calls)}")
+    print(f"DEBUG: calls value: {calls}")
+    
     summaries: List[str] = []
     sentiment_scores: List[float] = []
     sentiment_labels: Dict[str, int] = {}
@@ -258,6 +269,12 @@ def _compute_dashboard_summary(calls: List[Dict[str, Any]]) -> Dict[str, Any]:
     talk_values: List[float] = []
     hold_values: List[float] = []
 
+    # Debug: check if calls is actually a list
+    if not isinstance(calls, list):
+        print(f"ERROR: calls is not a list, it's {type(calls)}")
+        return {"error": "calls parameter is not a list"}
+
+    print(f"DEBUG: About to iterate over {len(calls)} calls")
     for c in calls:
         a = c.get("analysis") or {}
         if isinstance(a, dict) and a.get("summary"):
@@ -731,14 +748,14 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 "search_indexed": False,
             })
     
-    # After processing all files, recompute and persist dashboard summary in background-safe manner
-    try:
-        calls = list_calls()
-        summary_obj = _compute_dashboard_summary(calls)
-        _persist_summary(summary_obj)
-        print("Dashboard summary recomputed and persisted.")
-    except Exception as e:
-        print(f"Warning: Failed to recompute/persist summary: {e}")
+            # After processing all files, recompute and persist dashboard summary in background-safe manner
+        try:
+            calls = _list_calls_internal(refresh=True)
+            summary_obj = _compute_dashboard_summary(calls)
+            _persist_summary(summary_obj)
+            print("Dashboard summary recomputed and persisted.")
+        except Exception as e:
+            print(f"Warning: Failed to recompute/persist summary: {e}")
     
     return {"status": "ok", "processed": results}
 
@@ -758,40 +775,25 @@ def health() -> Dict[str, Any]:
         return {"status": "error", "message": str(e)}
 
 
-@app.route('/calls', methods=['GET'])
-def list_calls() -> List[Dict[str, Any]]:
+def _list_calls_simple() -> List[Dict[str, Any]]:
+    """Simplified version without caching for debugging"""
     try:
-        # Query params for performance controls
-        page = max(1, int(request.args.get('page', '1') or '1'))
-        page_size = max(1, min(200, int(request.args.get('page_size', '100') or '100')))
-        light = request.args.get('light', '0') in ('1', 'true', 'True')
-        refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
-
-        cache_key = f"calls:page={page}:size={page_size}:light={int(light)}"
-        if not refresh:
-            cached = _cache_get(cache_key, ttl_seconds=600)
-            if cached is not None:
-                # add short-lived cache headers for CDN/browser
-                resp = make_response(jsonify(cached), 200)
-                resp.headers['Cache-Control'] = 'public, max-age=30'
-                return resp
-
+        print("DEBUG: _list_calls_simple called")
+        
         # Ensure container exists
         azure_storage.ensure_container_exists(azure_storage.DEFAULT_CONTAINER)
-
         container = azure_storage.blob_service_client.get_container_client(azure_storage.DEFAULT_CONTAINER)
 
-        # Gather audio blobs from both the configured folder and anywhere in the container
+        # Gather audio blobs
         audio_exts = (".mp3", ".wav", ".m4a", ".mp4")
         audio_blobs = list(container.list_blobs(name_starts_with=f"{azure_storage.AUDIO_FOLDER}/"))
         if not audio_blobs:
-            # Fallback: scan entire container for audio extensions
             audio_blobs = [b for b in container.list_blobs() if any(b.name.lower().endswith(ext) for ext in audio_exts)]
 
-        # Build a minimal index first: (call_id, audio_name, uploaded_at, blob)
-        indexed: List[Dict[str, Any]] = []
-        seen_call_ids: set[str] = set()
-        for blob in audio_blobs:
+        entries = []
+        seen_call_ids = set()
+        
+        for blob in audio_blobs[:5]:  # Limit to first 5 for debugging
             audio_path = blob.name
             audio_name = audio_path.split("/")[-1]
             call_id = audio_name.rsplit(".", 1)[0]
@@ -799,70 +801,43 @@ def list_calls() -> List[Dict[str, Any]]:
                 continue
             seen_call_ids.add(call_id)
             created = getattr(blob, "creation_time", None) or getattr(blob, "last_modified", None)
-            indexed.append({
-                "call_id": call_id,
-                "audio_name": audio_name,
-                "uploaded_at": created.isoformat() if isinstance(created, datetime) else None,
-                "_blob": blob,
-            })
-
-        # newest first without loading analysis
-        indexed.sort(key=lambda x: x.get("uploaded_at") or "", reverse=True)
-
-        # Pagination window selection before any heavy I/O
-        start = (page - 1) * page_size
-        end = start + page_size
-        window = indexed[start:end]
-
-        entries: List[Dict[str, Any]] = []
-        for item in window:
-            call_id = item["call_id"]
-            audio_name = item["audio_name"]
-            uploaded_at = item["uploaded_at"]
-
-            parsed = None
-            first_analysis_path = None
-            category = None
-            attitude = None
-
-            if not light:
-                # Prefer persona analysis folder
-                parsed, first_analysis_path = _persona_analysis_for_call(call_id)
-                if not parsed:
-                    # Fallback: any analysis folder
-                    parsed, first_analysis_path = _first_analysis_for_call(call_id)
-                category, attitude = _derive_category_and_attitude(parsed)
-                if (category is None or attitude is None) and not parsed:
-                    norm_id = call_id.replace(" ", "_")
-                    if norm_id != call_id:
-                        parsed, first_analysis_path = _persona_analysis_for_call(norm_id)
-                        if not parsed:
-                            parsed, first_analysis_path = _first_analysis_for_call(norm_id)
-                        c2, a2 = _derive_category_and_attitude(parsed)
-                        category = category or c2
-                        attitude = attitude or a2
-
+            
             entries.append({
                 "audio_name": audio_name,
                 "call_id": call_id,
-                "uploaded_at": uploaded_at,
-                "analysis": None if light else parsed,
-                "call_category": category,
-                "agent_attitude": attitude,
-                "analysis_file": first_analysis_path,
+                "uploaded_at": created.isoformat() if isinstance(created, datetime) else None,
+                "analysis": None,
+                "call_category": None,
+                "agent_attitude": None,
+                "analysis_file": None,
             })
 
-        _cache_set(cache_key, entries)
+        print(f"DEBUG: _list_calls_simple returning {len(entries)} entries, type: {type(entries)}")
+        return entries
+    except Exception as e:
+        print(f"DEBUG: _list_calls_simple exception: {e}")
+        return []
+
+def _list_calls_internal(page: int = 1, page_size: int = 100, light: bool = False, refresh: bool = False) -> List[Dict[str, Any]]:
+    # Use simplified version for now to debug
+    return _list_calls_simple()
+
+@app.route('/calls', methods=['GET'])
+def list_calls() -> List[Dict[str, Any]]:
+    """Public endpoint for listing calls with HTTP cache headers"""
+    try:
+        # Query params for performance controls
+        page = max(1, int(request.args.get('page', '1') or '1'))
+        page_size = max(1, min(200, int(request.args.get('page_size', '100') or '100')))
+        light = request.args.get('light', '0') in ('1', 'true', 'True')
+        refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
+        
+        entries = _list_calls_internal(page, page_size, light, refresh)
         resp = make_response(jsonify(entries), 200)
         resp.headers['Cache-Control'] = 'public, max-age=30'
         return resp
-    except Exception:
-        # Fallback to simpler listing to avoid 500
-        try:
-            audios = azure_storage.list_audios()
-            return [{"audio_name": a, "call_id": a.rsplit(".", 1)[0], "uploaded_at": None, "analysis": None, "analysis_files": []} for a in audios]
-        except Exception:
-            return []
+    except Exception as e:
+        return make_response(jsonify({"error": str(e)}), 500)
 
 
 @app.route('/calls/<call_id>', methods=['GET'])
@@ -930,7 +905,7 @@ def dashboard_summary() -> Dict[str, Any]:
         return resp
 
     # Fallback: compute live (rare path)
-    calls = list_calls()
+    calls = _list_calls_internal(refresh=True)
     summaries: List[str] = []
     sentiment_scores: List[float] = []
     sentiment_labels: Dict[str, int] = {}
@@ -1051,7 +1026,7 @@ def dashboard_summary() -> Dict[str, Any]:
 def get_insights() -> Dict[str, Any]:
     """Get AI-generated comprehensive insights from all call summaries"""
     try:
-        calls = list_calls()
+        calls = _list_calls_internal(refresh=True)
         summaries: List[str] = []
         
         print(f"DEBUG: Found {len(calls)} total calls")
@@ -1428,7 +1403,7 @@ def reindex_all_calls() -> Dict[str, Any]:
         print("Starting re-indexing of all existing calls...")
         
         # Get all calls from the container
-        calls = list_calls()
+        calls = _list_calls_internal(refresh=True)
         if not calls:
             return {
                 "status": "no_calls",
@@ -1543,6 +1518,20 @@ def reindex_all_calls() -> Dict[str, Any]:
             "total_calls": 0
         }
 
+@app.route('/test-calls-internal', methods=['GET'])
+def test_calls_internal() -> Dict[str, Any]:
+    """Test endpoint to debug _list_calls_internal function"""
+    try:
+        calls = _list_calls_internal(refresh=True)
+        return {
+            "status": "ok", 
+            "calls_type": str(type(calls)),
+            "calls_length": len(calls) if isinstance(calls, list) else "not a list",
+            "first_call": calls[0] if isinstance(calls, list) and len(calls) > 0 else None
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e), "exception_type": str(type(e))}
+
 @app.route('/recompute-dashboard-summary', methods=['POST', 'OPTIONS'])
 def recompute_dashboard_summary() -> Dict[str, Any]:
     """Force recomputation and persistence of the dashboard summary for existing calls.
@@ -1557,15 +1546,25 @@ def recompute_dashboard_summary() -> Dict[str, Any]:
             refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
         except Exception:
             pass
+        
+        # Clear cache to avoid Response object issues
+        _cache_clear()
+        
         start = time.time()
-        calls = list_calls()
-        if isinstance(calls, tuple):
-            calls = calls[0]
+        calls = _list_calls_internal(refresh=True)
+        print(f"DEBUG: recompute_dashboard_summary got calls of type: {type(calls)}")
+        if isinstance(calls, list):
+            print(f"DEBUG: calls is a list with {len(calls)} items")
+        else:
+            print(f"DEBUG: calls is not a list, it's {type(calls)}")
+            return {"status": "error", "message": f"calls is not a list, it's {type(calls)}"}
+        
         summary_obj = _compute_dashboard_summary(calls)
         persisted = _persist_summary(summary_obj)
         took_ms = int((time.time() - start) * 1000)
         return {"status": "ok", "persisted": bool(persisted), "took_ms": took_ms, "total_calls": len(calls)}
     except Exception as e:
+        print(f"DEBUG: recompute_dashboard_summary exception: {e}")
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
