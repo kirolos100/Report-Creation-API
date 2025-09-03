@@ -715,123 +715,123 @@ def upload_complete_pipeline() -> Dict[str, Any]:
             })
     def dashboard_summary() -> Dict[str, Any]:
     # cache summary for a short time window to avoid re-computation on navigation
-    cached = _cache_get("dashboard_summary", ttl_seconds=3600)
-    if cached is not None:
-        return cached
+        cached = _cache_get("dashboard_summary", ttl_seconds=3600)
+        if cached is not None:
+            return cached
 
-    calls = list_calls()
-    summaries: List[str] = []
-    sentiment_scores: List[float] = []
-    sentiment_labels: Dict[str, int] = {}
-    dispositions: Dict[str, int] = {}
-    categories: Dict[str, int] = {}
-    resolution_status: Dict[str, int] = {}
-    subjects: Dict[str, int] = {}
-    services: Dict[str, int] = {}
-    agent_professionalism: Dict[str, int] = {}
-    resolved_count = 0
-    aht_values: List[float] = []
-    talk_values: List[float] = []
-    hold_values: List[float] = []
+        calls = list_calls()
+        summaries: List[str] = []
+        sentiment_scores: List[float] = []
+        sentiment_labels: Dict[str, int] = {}
+        dispositions: Dict[str, int] = {}
+        categories: Dict[str, int] = {}
+        resolution_status: Dict[str, int] = {}
+        subjects: Dict[str, int] = {}
+        services: Dict[str, int] = {}
+        agent_professionalism: Dict[str, int] = {}
+        resolved_count = 0
+        aht_values: List[float] = []
+        talk_values: List[float] = []
+        hold_values: List[float] = []
 
-    for c in calls:
-        a = c.get("analysis") or {}
-        if isinstance(a, dict) and a.get("summary"):
-            summaries.append(a["summary"]) 
-        # sentiment numeric (1-5)
-        s = a.get("sentiment", {})
-        if isinstance(s, dict):
-            score = s.get("score")
+        for c in calls:
+            a = c.get("analysis") or {}
+            if isinstance(a, dict) and a.get("summary"):
+                summaries.append(a["summary"]) 
+            # sentiment numeric (1-5)
+            s = a.get("sentiment", {})
+            if isinstance(s, dict):
+                score = s.get("score")
+                try:
+                    sentiment_scores.append(float(score))
+                except Exception:
+                    pass
+            # disposition counts
+            disp = a.get("disposition") or a.get("Disposition")
+            if isinstance(disp, dict):
+                dscore = disp.get("score")
+                if dscore:
+                    dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
+            # resolved
+            resolved = a.get("resolved")
+            if isinstance(resolved, dict) and resolved.get("score") is True:
+                resolved_count += 1
+
+            # structured insights
+            structured = _extract_structured_fields(a)
+            if structured.get("customer_sentiment"):
+                lbl = str(structured["customer_sentiment"]).strip()
+                sentiment_labels[lbl] = sentiment_labels.get(lbl, 0) + 1
+            if structured.get("call_categorization"):
+                cat = str(structured["call_categorization"]).strip()
+                categories[cat] = categories.get(cat, 0) + 1
+            if structured.get("resolution_status"):
+                rs = str(structured["resolution_status"]).strip()
+                resolution_status[rs] = resolution_status.get(rs, 0) + 1
+            if structured.get("main_subject"):
+                subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
+            if structured.get("services"):
+                # split on comma or semicolon into multiple services
+                sv = structured["services"]
+                if isinstance(sv, str):
+                    parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
+                    for p in parts:
+                        services[p] = services.get(p, 0) + 1
+                elif isinstance(sv, list):
+                    for p in sv:
+                        services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
+            # Agent professionalism/attitude histogram
+            if structured.get("agent_professionalism"):
+                att = str(structured.get("agent_professionalism")).strip()
+                if att:
+                    agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
+            # AHT and times
+            aht = structured.get("aht")
+            if isinstance(aht, dict):
+                try:
+                    aht_values.append(float(aht.get("score")))
+                except Exception:
+                    pass
+            if structured.get("talk_time_seconds") is not None:
+                try:
+                    talk_values.append(float(structured.get("talk_time_seconds")))
+                except Exception:
+                    pass
+            if structured.get("hold_time_seconds") is not None:
+                try:
+                    hold_values.append(float(structured.get("hold_time_seconds")))
+                except Exception:
+                    pass
+
+        overall_insights = None
+        if summaries:
             try:
-                sentiment_scores.append(float(score))
+                overall_insights = azure_oai.get_insights(summaries)
             except Exception:
-                pass
-        # disposition counts
-        disp = a.get("disposition") or a.get("Disposition")
-        if isinstance(disp, dict):
-            dscore = disp.get("score")
-            if dscore:
-                dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
-        # resolved
-        resolved = a.get("resolved")
-        if isinstance(resolved, dict) and resolved.get("score") is True:
-            resolved_count += 1
+                overall_insights = None
 
-        # structured insights
-        structured = _extract_structured_fields(a)
-        if structured.get("customer_sentiment"):
-            lbl = str(structured["customer_sentiment"]).strip()
-            sentiment_labels[lbl] = sentiment_labels.get(lbl, 0) + 1
-        if structured.get("call_categorization"):
-            cat = str(structured["call_categorization"]).strip()
-            categories[cat] = categories.get(cat, 0) + 1
-        if structured.get("resolution_status"):
-            rs = str(structured["resolution_status"]).strip()
-            resolution_status[rs] = resolution_status.get(rs, 0) + 1
-        if structured.get("main_subject"):
-            subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
-        if structured.get("services"):
-            # split on comma or semicolon into multiple services
-            sv = structured["services"]
-            if isinstance(sv, str):
-                parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
-                for p in parts:
-                    services[p] = services.get(p, 0) + 1
-            elif isinstance(sv, list):
-                for p in sv:
-                    services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
-        # Agent professionalism/attitude histogram
-        if structured.get("agent_professionalism"):
-            att = str(structured.get("agent_professionalism")).strip()
-            if att:
-                agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
-        # AHT and times
-        aht = structured.get("aht")
-        if isinstance(aht, dict):
-            try:
-                aht_values.append(float(aht.get("score")))
-            except Exception:
-                pass
-        if structured.get("talk_time_seconds") is not None:
-            try:
-                talk_values.append(float(structured.get("talk_time_seconds")))
-            except Exception:
-                pass
-        if structured.get("hold_time_seconds") is not None:
-            try:
-                hold_values.append(float(structured.get("hold_time_seconds")))
-            except Exception:
-                pass
-
-    overall_insights = None
-    if summaries:
-        try:
-            overall_insights = azure_oai.get_insights(summaries)
-        except Exception:
-            overall_insights = None
-
-    total = len(calls)
-    avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else None
-    avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
-    avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
-    avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
-    result = {
-        "total_calls": total,
-        "avg_sentiment": avg_sentiment,
-        "sentiment_labels": sentiment_labels,
-        "dispositions": dispositions,
-        "categories": categories,
-        "resolution_status": resolution_status,
-        "subjects": subjects,
-        "services": services,
-        "agent_professionalism": agent_professionalism,
-        "resolved_rate": (resolved_count / total) if total else None,
-        "avg_aht_seconds": avg_aht,
-        "avg_talk_seconds": avg_talk,
-        "avg_hold_seconds": avg_hold,
-        "overall_insights": overall_insights,
-    }
-    _cache_set("dashboard_summary", result)
+        total = len(calls)
+        avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else None
+        avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
+        avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
+        avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
+        result = {
+            "total_calls": total,
+            "avg_sentiment": avg_sentiment,
+            "sentiment_labels": sentiment_labels,
+            "dispositions": dispositions,
+            "categories": categories,
+            "resolution_status": resolution_status,
+            "subjects": subjects,
+            "services": services,
+            "agent_professionalism": agent_professionalism,
+            "resolved_rate": (resolved_count / total) if total else None,
+            "avg_aht_seconds": avg_aht,
+            "avg_talk_seconds": avg_talk,
+            "avg_hold_seconds": avg_hold,
+            "overall_insights": overall_insights,
+        }
+        _cache_set("dashboard_summary", result)
     
     
     return {"status": "ok", "processed": results}
