@@ -808,7 +808,6 @@ def get_insights() -> Dict[str, Any]:
                 You are an expert call center analyst. Based on the following call summaries, provide a comprehensive analysis that includes:
 
                 **Overall Call Volume and Patterns**
-                - Total number of calls analyzed
                 - General patterns and trends observed
 
                 **Main Issues and Topics**
