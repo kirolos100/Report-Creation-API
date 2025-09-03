@@ -216,6 +216,26 @@ def _parse_json_maybe(text: str) -> Any:
         except Exception:
             pass
     return {"raw": text}
+# --------------------------
+# Simple in-process cache
+# --------------------------
+_CACHE: Dict[str, Dict[str, Any]] = {}
+
+def _cache_get(key: str, ttl_seconds: int) -> Any | None:
+    entry = _CACHE.get(key)
+    if not entry:
+        return None
+    ts = entry.get("ts")
+    if not isinstance(ts, float):
+        return None
+    if (datetime.utcnow().timestamp() - ts) > ttl_seconds:
+        _CACHE.pop(key, None)
+        return None
+    return entry.get("data")
+
+def _cache_set(key: str, value: Any) -> None:
+    _CACHE[key] = {"data": value, "ts": datetime.utcnow().timestamp()}
+
 
 
 def _first_analysis_for_call(call_id: str) -> tuple[Any | None, str | None]:
@@ -596,6 +616,18 @@ def health() -> Dict[str, Any]:
 @app.route('/calls', methods=['GET'])
 def list_calls() -> List[Dict[str, Any]]:
     try:
+        # Query params for performance controls
+        page = max(1, int(request.args.get('page', '1') or '1'))
+        page_size = max(1, min(200, int(request.args.get('page_size', '100') or '100')))
+        light = request.args.get('light', '0') in ('1', 'true', 'True')
+        refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
+
+        cache_key = f"calls:page={page}:size={page_size}:light={int(light)}"
+        if not refresh:
+            cached = _cache_get(cache_key, ttl_seconds=60)
+            if cached is not None:
+                return cached
+
         # Ensure container exists
         azure_storage.ensure_container_exists(azure_storage.DEFAULT_CONTAINER)
 
@@ -608,7 +640,8 @@ def list_calls() -> List[Dict[str, Any]]:
             # Fallback: scan entire container for audio extensions
             audio_blobs = [b for b in container.list_blobs() if any(b.name.lower().endswith(ext) for ext in audio_exts)]
 
-        entries: List[Dict[str, Any]] = []
+        # Build a minimal index first: (call_id, audio_name, uploaded_at, blob)
+        indexed: List[Dict[str, Any]] = []
         seen_call_ids: set[str] = set()
         for blob in audio_blobs:
             audio_path = blob.name
@@ -617,37 +650,61 @@ def list_calls() -> List[Dict[str, Any]]:
             if call_id in seen_call_ids:
                 continue
             seen_call_ids.add(call_id)
-
-            # Prefer persona analysis folder
-            parsed, first_analysis_path = _persona_analysis_for_call(call_id)
-            if not parsed:
-                # Fallback: any analysis folder
-                parsed, first_analysis_path = _first_analysis_for_call(call_id)
-            category, attitude = _derive_category_and_attitude(parsed)
-            # If still missing, try a second pass: look for JSON named exactly by audio base even if extension differs
-            if (category is None or attitude is None) and not parsed:
-                # attempt: if audio file has dashes or underscores variations, try normalized id
-                norm_id = call_id.replace(" ", "_")
-                if norm_id != call_id:
-                    parsed, first_analysis_path = _persona_analysis_for_call(norm_id)
-                    if not parsed:
-                        parsed, first_analysis_path = _first_analysis_for_call(norm_id)
-                    c2, a2 = _derive_category_and_attitude(parsed)
-                    category = category or c2
-                    attitude = attitude or a2
             created = getattr(blob, "creation_time", None) or getattr(blob, "last_modified", None)
+            indexed.append({
+                "call_id": call_id,
+                "audio_name": audio_name,
+                "uploaded_at": created.isoformat() if isinstance(created, datetime) else None,
+                "_blob": blob,
+            })
+
+        # newest first without loading analysis
+        indexed.sort(key=lambda x: x.get("uploaded_at") or "", reverse=True)
+
+        # Pagination window selection before any heavy I/O
+        start = (page - 1) * page_size
+        end = start + page_size
+        window = indexed[start:end]
+
+        entries: List[Dict[str, Any]] = []
+        for item in window:
+            call_id = item["call_id"]
+            audio_name = item["audio_name"]
+            uploaded_at = item["uploaded_at"]
+
+            parsed = None
+            first_analysis_path = None
+            category = None
+            attitude = None
+
+            if not light:
+                # Prefer persona analysis folder
+                parsed, first_analysis_path = _persona_analysis_for_call(call_id)
+                if not parsed:
+                    # Fallback: any analysis folder
+                    parsed, first_analysis_path = _first_analysis_for_call(call_id)
+                category, attitude = _derive_category_and_attitude(parsed)
+                if (category is None or attitude is None) and not parsed:
+                    norm_id = call_id.replace(" ", "_")
+                    if norm_id != call_id:
+                        parsed, first_analysis_path = _persona_analysis_for_call(norm_id)
+                        if not parsed:
+                            parsed, first_analysis_path = _first_analysis_for_call(norm_id)
+                        c2, a2 = _derive_category_and_attitude(parsed)
+                        category = category or c2
+                        attitude = attitude or a2
+
             entries.append({
                 "audio_name": audio_name,
                 "call_id": call_id,
-                "uploaded_at": created.isoformat() if isinstance(created, datetime) else None,
-                "analysis": parsed,
+                "uploaded_at": uploaded_at,
+                "analysis": None if light else parsed,
                 "call_category": category,
                 "agent_attitude": attitude,
                 "analysis_file": first_analysis_path,
             })
 
-        # newest first
-        entries.sort(key=lambda x: x.get("uploaded_at") or "", reverse=True)
+        _cache_set(cache_key, entries)
         return entries
     except Exception:
         # Fallback to simpler listing to avoid 500
@@ -686,6 +743,11 @@ def get_call(call_id: str) -> Dict[str, Any]:
 
 @app.route('/dashboard/summary', methods=['GET'])
 def dashboard_summary() -> Dict[str, Any]:
+    # cache summary for a short time window to avoid re-computation on navigation
+    cached = _cache_get("dashboard_summary", ttl_seconds=60)
+    if cached is not None:
+        return cached
+
     calls = list_calls()
     summaries: List[str] = []
     sentiment_scores: List[float] = []
@@ -782,7 +844,7 @@ def dashboard_summary() -> Dict[str, Any]:
     avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
     avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
     avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
-    return {
+    result = {
         "total_calls": total,
         "avg_sentiment": avg_sentiment,
         "sentiment_labels": sentiment_labels,
@@ -798,6 +860,8 @@ def dashboard_summary() -> Dict[str, Any]:
         "avg_hold_seconds": avg_hold,
         "overall_insights": overall_insights,
     }
+    _cache_set("dashboard_summary", result)
+    return result
 
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
