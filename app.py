@@ -624,7 +624,7 @@ def list_calls() -> List[Dict[str, Any]]:
 
         cache_key = f"calls:page={page}:size={page_size}:light={int(light)}"
         if not refresh:
-            cached = _cache_get(cache_key, ttl_seconds=60)
+            cached = _cache_get(cache_key, ttl_seconds=3600)
             if cached is not None:
                 return cached
 
@@ -767,7 +767,7 @@ def get_call(call_id: str) -> Dict[str, Any]:
 @app.route('/dashboard/summary', methods=['GET'])
 def dashboard_summary() -> Dict[str, Any]:
     # cache summary for a short time window to avoid re-computation on navigation
-    cached = _cache_get("dashboard_summary", ttl_seconds=60)
+    cached = _cache_get("dashboard_summary", ttl_seconds=3600)
     if cached is not None:
         return cached
 
