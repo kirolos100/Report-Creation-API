@@ -320,11 +320,14 @@ def calculate_dashboard_summary() -> Dict[str, Any]:
     aht_values: List[float] = []
     talk_values: List[float] = []
     hold_values: List[float] = []
+    calls_with_analysis = 0
 
     for c in calls:
         a = c.get("analysis") or {}
         if isinstance(a, dict) and a.get("summary"):
             summaries.append(a["summary"]) 
+            calls_with_analysis += 1
+            
         # sentiment numeric (1-5)
         s = a.get("sentiment", {})
         if isinstance(s, dict):
@@ -404,6 +407,7 @@ def calculate_dashboard_summary() -> Dict[str, Any]:
     avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
     result = {
         "total_calls": total,
+        "calls_with_analysis": calls_with_analysis,
         "avg_sentiment": avg_sentiment,
         "sentiment_labels": sentiment_labels,
         "dispositions": dispositions,
@@ -419,6 +423,46 @@ def calculate_dashboard_summary() -> Dict[str, Any]:
         "overall_insights": overall_insights,
     }
     return result
+
+
+def clear_calls_cache() -> None:
+    """Clear all calls-related cache entries."""
+    try:
+        # Clear all cache entries that start with "calls:"
+        keys_to_remove = [key for key in _CACHE.keys() if key.startswith("calls:")]
+        for key in keys_to_remove:
+            _CACHE.pop(key, None)
+        print(f"Cleared {len(keys_to_remove)} calls cache entries")
+    except Exception as e:
+        print(f"Error clearing calls cache: {e}")
+
+
+def refresh_calls_and_dashboard() -> Dict[str, Any]:
+    """Refresh calls list and dashboard summary after deletions."""
+    try:
+        print("Refreshing calls list and dashboard summary...")
+        
+        # Clear calls cache to force fresh scan
+        clear_calls_cache()
+        
+        # Calculate fresh dashboard summary
+        dashboard_data = calculate_dashboard_summary()
+        
+        # Save updated dashboard to blob storage
+        save_dashboard_summary_to_blob(dashboard_data)
+        
+        return {
+            "status": "success",
+            "message": "Calls list and dashboard summary refreshed successfully",
+            "total_calls": dashboard_data.get("total_calls", 0),
+            "refreshed_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error refreshing calls and dashboard: {str(e)}"
+        }
 
 
 
@@ -817,7 +861,8 @@ def list_calls() -> List[Dict[str, Any]]:
 
         cache_key = f"calls:page={page}:size={page_size}:light={int(light)}"
         if not refresh:
-            cached = _cache_get(cache_key, ttl_seconds=3600)
+            # Reduced TTL to 5 minutes to detect deletions faster
+            cached = _cache_get(cache_key, ttl_seconds=300)
             if cached is not None:
                 return cached
 
@@ -1360,6 +1405,16 @@ def refresh_dashboard_cache() -> Dict[str, Any]:
             "status": "error",
             "message": f"Error refreshing dashboard cache: {str(e)}"
         }
+
+
+@app.route('/refresh-calls-and-dashboard', methods=['POST', 'OPTIONS'])
+def refresh_calls_and_dashboard_endpoint() -> Dict[str, Any]:
+    """Manually refresh both calls list and dashboard summary after deletions."""
+    # Handle OPTIONS preflight request
+    if request.method == 'OPTIONS':
+        return {"status": "ok"}
+        
+    return refresh_calls_and_dashboard()
 
 
 @app.route('/reindex-all-calls', methods=['POST', 'OPTIONS'])
