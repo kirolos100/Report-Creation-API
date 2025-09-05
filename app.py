@@ -67,15 +67,33 @@ def add_cors_headers(response):
 # Health check endpoint
 @app.route('/', methods=['GET'])
 def read_root():
-    # Calculate and save dashboard summary to blob storage
+    # Health check without forcing cache invalidation
     try:
+        # Try to get cached dashboard data first
+        cached_blob_data = load_dashboard_summary_from_blob()
+        if cached_blob_data is not None:
+            return {
+                "status": "healthy", 
+                "message": "API is running",
+                "dashboard_summary_cached": True,
+                "total_calls": cached_blob_data.get("total_calls", 0),
+                "calls_with_analysis": cached_blob_data.get("calls_with_analysis", 0),
+                "cache_version": _get_cache_version(),
+                "last_change": datetime.fromtimestamp(_LAST_CHANGE_TIMESTAMP).isoformat() if _LAST_CHANGE_TIMESTAMP > 0 else "Never"
+            }
+        
+        # If no cached data, calculate fresh
         dashboard_data = calculate_dashboard_summary()
         save_dashboard_summary_to_blob(dashboard_data)
+        
         return {
             "status": "healthy", 
             "message": "API is running",
             "dashboard_summary_cached": True,
-            "total_calls": dashboard_data.get("total_calls", 0)
+            "total_calls": dashboard_data.get("total_calls", 0),
+            "calls_with_analysis": dashboard_data.get("calls_with_analysis", 0),
+            "cache_version": _get_cache_version(),
+            "last_change": datetime.fromtimestamp(_LAST_CHANGE_TIMESTAMP).isoformat() if _LAST_CHANGE_TIMESTAMP > 0 else "Never"
         }
     except Exception as e:
         print(f"Error calculating dashboard summary in health check: {e}")
@@ -233,24 +251,54 @@ def _parse_json_maybe(text: str) -> Any:
             pass
     return {"raw": text}
 # --------------------------
-# Simple in-process cache
+# Smart event-driven cache system
 # --------------------------
 _CACHE: Dict[str, Dict[str, Any]] = {}
+_CACHE_VERSION: str = "1.0"  # Global cache version
+_LAST_CHANGE_TIMESTAMP: float = 0  # Track when data last changed
 
-def _cache_get(key: str, ttl_seconds: int) -> Any | None:
+def _get_cache_version() -> str:
+    """Get current cache version based on last change timestamp."""
+    return f"{_CACHE_VERSION}_{_LAST_CHANGE_TIMESTAMP}"
+
+def _invalidate_cache() -> None:
+    """Invalidate all caches by updating the change timestamp."""
+    global _LAST_CHANGE_TIMESTAMP
+    _LAST_CHANGE_TIMESTAMP = datetime.utcnow().timestamp()
+    print(f"Cache invalidated at {datetime.utcnow().isoformat()}")
+
+def _cache_get(key: str, ttl_seconds: int = 86400) -> Any | None:  # Default 24 hours
+    """Get cached data, but check if cache version is still valid."""
     entry = _CACHE.get(key)
     if not entry:
         return None
+    
+    # Check if cache version is still current
+    cached_version = entry.get("version")
+    current_version = _get_cache_version()
+    
+    if cached_version != current_version:
+        print(f"Cache version mismatch for {key}: cached={cached_version}, current={current_version}")
+        _CACHE.pop(key, None)
+        return None
+    
+    # Check TTL (but with very long default)
     ts = entry.get("ts")
     if not isinstance(ts, float):
         return None
     if (datetime.utcnow().timestamp() - ts) > ttl_seconds:
         _CACHE.pop(key, None)
         return None
+    
     return entry.get("data")
 
 def _cache_set(key: str, value: Any) -> None:
-    _CACHE[key] = {"data": value, "ts": datetime.utcnow().timestamp()}
+    """Set cached data with current version."""
+    _CACHE[key] = {
+        "data": value, 
+        "ts": datetime.utcnow().timestamp(),
+        "version": _get_cache_version()
+    }
 
 
 def save_dashboard_summary_to_blob(dashboard_data: Dict[str, Any]) -> bool:
@@ -426,13 +474,11 @@ def calculate_dashboard_summary() -> Dict[str, Any]:
 
 
 def clear_calls_cache() -> None:
-    """Clear all calls-related cache entries."""
+    """Clear all calls-related cache entries using smart invalidation."""
     try:
-        # Clear all cache entries that start with "calls:"
-        keys_to_remove = [key for key in _CACHE.keys() if key.startswith("calls:")]
-        for key in keys_to_remove:
-            _CACHE.pop(key, None)
-        print(f"Cleared {len(keys_to_remove)} calls cache entries")
+        # Use smart invalidation instead of manual clearing
+        _invalidate_cache()
+        print("Calls cache invalidated using smart versioning")
     except Exception as e:
         print(f"Error clearing calls cache: {e}")
 
@@ -823,12 +869,18 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 "search_indexed": False,
             })
     
-    # Update dashboard summary after processing all files
+    # Update dashboard summary and invalidate cache after processing all files
     try:
-        print("Updating dashboard summary after file processing...")
+        print("Updating dashboard summary and invalidating cache after file processing...")
+        
+        # Invalidate all caches immediately when files are processed
+        _invalidate_cache()
+        
+        # Calculate fresh dashboard summary
         dashboard_data = calculate_dashboard_summary()
         save_dashboard_summary_to_blob(dashboard_data)
-        print("Dashboard summary updated successfully")
+        
+        print("Dashboard summary updated and cache invalidated successfully")
     except Exception as e:
         print(f"Error updating dashboard summary: {e}")
     
@@ -861,8 +913,8 @@ def list_calls() -> List[Dict[str, Any]]:
 
         cache_key = f"calls:page={page}:size={page_size}:light={int(light)}"
         if not refresh:
-            # Reduced TTL to 5 minutes to detect deletions faster
-            cached = _cache_get(cache_key, ttl_seconds=300)
+            # Use smart cache with long TTL (24 hours) - only invalidated on changes
+            cached = _cache_get(cache_key, ttl_seconds=86400)  # 24 hours
             if cached is not None:
                 return cached
 
@@ -981,24 +1033,35 @@ def get_call(call_id: str) -> Dict[str, Any]:
 
 @app.route('/dashboard/summary', methods=['GET'])
 def dashboard_summary() -> Dict[str, Any]:
-    # First try to load from blob storage cache
-    cached_blob_data = load_dashboard_summary_from_blob()
-    if cached_blob_data is not None:
-        # Remove metadata fields before returning
-        result = {k: v for k, v in cached_blob_data.items() 
-                 if k not in ["cached_at", "cache_version"]}
-        print("Dashboard summary loaded from blob storage cache")
-        return result
+    # Check if we should force refresh
+    force_refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
     
-    # Fallback: try in-memory cache
-    cached = _cache_get("dashboard_summary", ttl_seconds=3600)
-    if cached is not None:
-        return cached
+    if not force_refresh:
+        # First try to load from blob storage cache
+        cached_blob_data = load_dashboard_summary_from_blob()
+        if cached_blob_data is not None:
+            # Remove metadata fields before returning
+            result = {k: v for k, v in cached_blob_data.items() 
+                     if k not in ["cached_at", "cache_version"]}
+            print("Dashboard summary loaded from blob storage cache")
+            return result
+        
+        # Fallback: try in-memory cache with long TTL (only invalidated on changes)
+        cached = _cache_get("dashboard_summary", ttl_seconds=86400)  # 24 hours
+        if cached is not None:
+            return cached
 
-    # Last resort: calculate fresh data
+    # Calculate fresh data (either forced refresh or no cache available)
     print("Calculating fresh dashboard summary data")
     result = calculate_dashboard_summary()
     _cache_set("dashboard_summary", result)
+    
+    # Also save to blob storage for persistence
+    try:
+        save_dashboard_summary_to_blob(result)
+    except Exception as e:
+        print(f"Warning: Could not save dashboard summary to blob storage: {e}")
+    
     return result
 
 @app.route('/insights', methods=['GET'])
@@ -1417,6 +1480,66 @@ def refresh_calls_and_dashboard_endpoint() -> Dict[str, Any]:
     return refresh_calls_and_dashboard()
 
 
+@app.route('/invalidate-cache', methods=['POST', 'OPTIONS'])
+def invalidate_cache_endpoint() -> Dict[str, Any]:
+    """Manually invalidate all caches - use after deleting files from blob storage."""
+    # Handle OPTIONS preflight request
+    if request.method == 'OPTIONS':
+        return {"status": "ok"}
+        
+    try:
+        print("Manually invalidating all caches...")
+        
+        # Invalidate all caches using smart versioning
+        _invalidate_cache()
+        
+        return {
+            "status": "success",
+            "message": "All caches invalidated successfully",
+            "cache_version": _get_cache_version(),
+            "invalidated_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error invalidating caches: {str(e)}"
+        }
+
+
+@app.route('/force-refresh-all', methods=['POST', 'OPTIONS'])
+def force_refresh_all() -> Dict[str, Any]:
+    """Force refresh all caches and data - use after uploads or deletions."""
+    # Handle OPTIONS preflight request
+    if request.method == 'OPTIONS':
+        return {"status": "ok"}
+        
+    try:
+        print("Force refreshing all caches and data...")
+        
+        # Invalidate all caches using smart versioning
+        _invalidate_cache()
+        
+        # Calculate fresh dashboard summary
+        dashboard_data = calculate_dashboard_summary()
+        save_dashboard_summary_to_blob(dashboard_data)
+        
+        return {
+            "status": "success",
+            "message": "All caches invalidated and data refreshed successfully",
+            "total_calls": dashboard_data.get("total_calls", 0),
+            "calls_with_analysis": dashboard_data.get("calls_with_analysis", 0),
+            "cache_version": _get_cache_version(),
+            "refreshed_at": datetime.utcnow().isoformat()
+        }
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error force refreshing all data: {str(e)}"
+        }
+
+
 @app.route('/reindex-all-calls', methods=['POST', 'OPTIONS'])
 def reindex_all_calls() -> Dict[str, Any]:
     """Re-index all existing calls into the Azure Search index for chat functionality."""
@@ -1511,13 +1634,23 @@ def reindex_all_calls() -> Dict[str, Any]:
                 new_count = azure_search.get_index_document_count("marketing_sentiment_details")
                 indexed_count = new_count
                 
+                # Clear caches after successful reindexing
+                try:
+                    clear_calls_cache()
+                    dashboard_data = calculate_dashboard_summary()
+                    save_dashboard_summary_to_blob(dashboard_data)
+                    print("Caches cleared after reindexing")
+                except Exception as e:
+                    print(f"Warning: Could not clear caches after reindexing: {e}")
+                
                 return {
                     "status": "success",
                     "message": f"Successfully re-indexed {indexed_count} documents",
                     "indexed_count": indexed_count,
                     "total_calls": len(calls),
                     "previous_count": current_count,
-                    "new_count": new_count
+                    "new_count": new_count,
+                    "caches_cleared": True
                 }
             else:
                 return {
