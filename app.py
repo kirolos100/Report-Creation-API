@@ -67,127 +67,24 @@ def add_cors_headers(response):
 # Health check endpoint
 @app.route('/', methods=['GET'])
 def read_root():
-    return {"status": "healthy", "message": "API is running"}
-def dashboard_summary() -> Dict[str, Any]:
-    # cache summary for a short time window to avoid re-computation on navigation
-    cached = _cache_get("dashboard_summary", ttl_seconds=3600)
-    if cached is not None:
-        return cached
-
-    calls = list_calls()
-    summaries: List[str] = []
-    sentiment_scores: List[float] = []
-    sentiment_labels: Dict[str, int] = {}
-    dispositions: Dict[str, int] = {}
-    categories: Dict[str, int] = {}
-    resolution_status: Dict[str, int] = {}
-    subjects: Dict[str, int] = {}
-    services: Dict[str, int] = {}
-    agent_professionalism: Dict[str, int] = {}
-    resolved_count = 0
-    aht_values: List[float] = []
-    talk_values: List[float] = []
-    hold_values: List[float] = []
-
-    for c in calls:
-        a = c.get("analysis") or {}
-        if isinstance(a, dict) and a.get("summary"):
-            summaries.append(a["summary"]) 
-        # sentiment numeric (1-5)
-        s = a.get("sentiment", {})
-        if isinstance(s, dict):
-            score = s.get("score")
-            try:
-                sentiment_scores.append(float(score))
-            except Exception:
-                pass
-        # disposition counts
-        disp = a.get("disposition") or a.get("Disposition")
-        if isinstance(disp, dict):
-            dscore = disp.get("score")
-            if dscore:
-                dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
-        # resolved
-        resolved = a.get("resolved")
-        if isinstance(resolved, dict) and resolved.get("score") is True:
-            resolved_count += 1
-
-        # structured insights
-        structured = _extract_structured_fields(a)
-        if structured.get("customer_sentiment"):
-            lbl = str(structured["customer_sentiment"]).strip()
-            sentiment_labels[lbl] = sentiment_labels.get(lbl, 0) + 1
-        if structured.get("call_categorization"):
-            cat = str(structured["call_categorization"]).strip()
-            categories[cat] = categories.get(cat, 0) + 1
-        if structured.get("resolution_status"):
-            rs = str(structured["resolution_status"]).strip()
-            resolution_status[rs] = resolution_status.get(rs, 0) + 1
-        if structured.get("main_subject"):
-            subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
-        if structured.get("services"):
-            # split on comma or semicolon into multiple services
-            sv = structured["services"]
-            if isinstance(sv, str):
-                parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
-                for p in parts:
-                    services[p] = services.get(p, 0) + 1
-            elif isinstance(sv, list):
-                for p in sv:
-                    services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
-        # Agent professionalism/attitude histogram
-        if structured.get("agent_professionalism"):
-            att = str(structured.get("agent_professionalism")).strip()
-            if att:
-                agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
-        # AHT and times
-        aht = structured.get("aht")
-        if isinstance(aht, dict):
-            try:
-                aht_values.append(float(aht.get("score")))
-            except Exception:
-                pass
-        if structured.get("talk_time_seconds") is not None:
-            try:
-                talk_values.append(float(structured.get("talk_time_seconds")))
-            except Exception:
-                pass
-        if structured.get("hold_time_seconds") is not None:
-            try:
-                hold_values.append(float(structured.get("hold_time_seconds")))
-            except Exception:
-                pass
-
-    overall_insights = None
-    if summaries:
-        try:
-            overall_insights = azure_oai.get_insights(summaries)
-        except Exception:
-            overall_insights = None
-
-    total = len(calls)
-    avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else None
-    avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
-    avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
-    avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
-    result = {
-        "total_calls": total,
-        "avg_sentiment": avg_sentiment,
-        "sentiment_labels": sentiment_labels,
-        "dispositions": dispositions,
-        "categories": categories,
-        "resolution_status": resolution_status,
-        "subjects": subjects,
-        "services": services,
-        "agent_professionalism": agent_professionalism,
-        "resolved_rate": (resolved_count / total) if total else None,
-        "avg_aht_seconds": avg_aht,
-        "avg_talk_seconds": avg_talk,
-        "avg_hold_seconds": avg_hold,
-        "overall_insights": overall_insights,
-    }
-    _cache_set("dashboard_summary", result)
-    return result
+    # Calculate and save dashboard summary to blob storage
+    try:
+        dashboard_data = calculate_dashboard_summary()
+        save_dashboard_summary_to_blob(dashboard_data)
+        return {
+            "status": "healthy", 
+            "message": "API is running",
+            "dashboard_summary_cached": True,
+            "total_calls": dashboard_data.get("total_calls", 0)
+        }
+    except Exception as e:
+        print(f"Error calculating dashboard summary in health check: {e}")
+        return {
+            "status": "healthy", 
+            "message": "API is running",
+            "dashboard_summary_cached": False,
+            "error": str(e)
+        }
 
 
 
@@ -354,6 +251,174 @@ def _cache_get(key: str, ttl_seconds: int) -> Any | None:
 
 def _cache_set(key: str, value: Any) -> None:
     _CACHE[key] = {"data": value, "ts": datetime.utcnow().timestamp()}
+
+
+def save_dashboard_summary_to_blob(dashboard_data: Dict[str, Any]) -> bool:
+    """Save dashboard summary data to blob storage as JSON file."""
+    try:
+        # Add timestamp to the data
+        dashboard_data_with_timestamp = {
+            **dashboard_data,
+            "cached_at": datetime.utcnow().isoformat(),
+            "cache_version": "1.0"
+        }
+        
+        # Convert to JSON string
+        json_data = json.dumps(dashboard_data_with_timestamp, indent=2)
+        
+        # Upload to blob storage
+        azure_storage.upload_blob(
+            json_data.encode('utf-8'),
+            "dashboard_summary.json",
+            prefix="cache",
+            container_name=azure_storage.DEFAULT_CONTAINER
+        )
+        
+        print("Dashboard summary saved to blob storage successfully")
+        return True
+    except Exception as e:
+        print(f"Error saving dashboard summary to blob storage: {e}")
+        return False
+
+
+def load_dashboard_summary_from_blob() -> Dict[str, Any] | None:
+    """Load dashboard summary data from blob storage."""
+    try:
+        # Try to read from blob storage
+        json_content = azure_storage.read_blob(
+            "dashboard_summary.json",
+            prefix="cache",
+            container_name=azure_storage.DEFAULT_CONTAINER
+        )
+        
+        if json_content:
+            dashboard_data = json.loads(json_content)
+            print("Dashboard summary loaded from blob storage successfully")
+            return dashboard_data
+        else:
+            print("No dashboard summary found in blob storage")
+            return None
+            
+    except Exception as e:
+        print(f"Error loading dashboard summary from blob storage: {e}")
+        return None
+
+
+def calculate_dashboard_summary() -> Dict[str, Any]:
+    """Calculate dashboard summary data without caching."""
+    calls = list_calls()
+    summaries: List[str] = []
+    sentiment_scores: List[float] = []
+    sentiment_labels: Dict[str, int] = {}
+    dispositions: Dict[str, int] = {}
+    categories: Dict[str, int] = {}
+    resolution_status: Dict[str, int] = {}
+    subjects: Dict[str, int] = {}
+    services: Dict[str, int] = {}
+    agent_professionalism: Dict[str, int] = {}
+    resolved_count = 0
+    aht_values: List[float] = []
+    talk_values: List[float] = []
+    hold_values: List[float] = []
+
+    for c in calls:
+        a = c.get("analysis") or {}
+        if isinstance(a, dict) and a.get("summary"):
+            summaries.append(a["summary"]) 
+        # sentiment numeric (1-5)
+        s = a.get("sentiment", {})
+        if isinstance(s, dict):
+            score = s.get("score")
+            try:
+                sentiment_scores.append(float(score))
+            except Exception:
+                pass
+        # disposition counts
+        disp = a.get("disposition") or a.get("Disposition")
+        if isinstance(disp, dict):
+            dscore = disp.get("score")
+            if dscore:
+                dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
+        # resolved
+        resolved = a.get("resolved")
+        if isinstance(resolved, dict) and resolved.get("score") is True:
+            resolved_count += 1
+
+        # structured insights
+        structured = _extract_structured_fields(a)
+        if structured.get("customer_sentiment"):
+            lbl = str(structured["customer_sentiment"]).strip()
+            sentiment_labels[lbl] = sentiment_labels.get(lbl, 0) + 1
+        if structured.get("call_categorization"):
+            cat = str(structured["call_categorization"]).strip()
+            categories[cat] = categories.get(cat, 0) + 1
+        if structured.get("resolution_status"):
+            rs = str(structured["resolution_status"]).strip()
+            resolution_status[rs] = resolution_status.get(rs, 0) + 1
+        if structured.get("main_subject"):
+            subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
+        if structured.get("services"):
+            # split on comma or semicolon into multiple services
+            sv = structured["services"]
+            if isinstance(sv, str):
+                parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
+                for p in parts:
+                    services[p] = services.get(p, 0) + 1
+            elif isinstance(sv, list):
+                for p in sv:
+                    services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
+        # Agent professionalism/attitude histogram
+        if structured.get("agent_professionalism"):
+            att = str(structured.get("agent_professionalism")).strip()
+            if att:
+                agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
+        # AHT and times
+        aht = structured.get("aht")
+        if isinstance(aht, dict):
+            try:
+                aht_values.append(float(aht.get("score")))
+            except Exception:
+                pass
+        if structured.get("talk_time_seconds") is not None:
+            try:
+                talk_values.append(float(structured.get("talk_time_seconds")))
+            except Exception:
+                pass
+        if structured.get("hold_time_seconds") is not None:
+            try:
+                hold_values.append(float(structured.get("hold_time_seconds")))
+            except Exception:
+                pass
+
+    overall_insights = None
+    if summaries:
+        try:
+            overall_insights = azure_oai.get_insights(summaries)
+        except Exception:
+            overall_insights = None
+
+    total = len(calls)
+    avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else None
+    avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
+    avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
+    avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
+    result = {
+        "total_calls": total,
+        "avg_sentiment": avg_sentiment,
+        "sentiment_labels": sentiment_labels,
+        "dispositions": dispositions,
+        "categories": categories,
+        "resolution_status": resolution_status,
+        "subjects": subjects,
+        "services": services,
+        "agent_professionalism": agent_professionalism,
+        "resolved_rate": (resolved_count / total) if total else None,
+        "avg_aht_seconds": avg_aht,
+        "avg_talk_seconds": avg_talk,
+        "avg_hold_seconds": avg_hold,
+        "overall_insights": overall_insights,
+    }
+    return result
 
 
 
@@ -713,126 +778,15 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 "error": error_msg,
                 "search_indexed": False,
             })
-    def dashboard_summary() -> Dict[str, Any]:
-    # cache summary for a short time window to avoid re-computation on navigation
-        cached = _cache_get("dashboard_summary", ttl_seconds=3600)
-        if cached is not None:
-            return cached
-
-        calls = list_calls()
-        summaries: List[str] = []
-        sentiment_scores: List[float] = []
-        sentiment_labels: Dict[str, int] = {}
-        dispositions: Dict[str, int] = {}
-        categories: Dict[str, int] = {}
-        resolution_status: Dict[str, int] = {}
-        subjects: Dict[str, int] = {}
-        services: Dict[str, int] = {}
-        agent_professionalism: Dict[str, int] = {}
-        resolved_count = 0
-        aht_values: List[float] = []
-        talk_values: List[float] = []
-        hold_values: List[float] = []
-
-        for c in calls:
-            a = c.get("analysis") or {}
-            if isinstance(a, dict) and a.get("summary"):
-                summaries.append(a["summary"]) 
-            # sentiment numeric (1-5)
-            s = a.get("sentiment", {})
-            if isinstance(s, dict):
-                score = s.get("score")
-                try:
-                    sentiment_scores.append(float(score))
-                except Exception:
-                    pass
-            # disposition counts
-            disp = a.get("disposition") or a.get("Disposition")
-            if isinstance(disp, dict):
-                dscore = disp.get("score")
-                if dscore:
-                    dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
-            # resolved
-            resolved = a.get("resolved")
-            if isinstance(resolved, dict) and resolved.get("score") is True:
-                resolved_count += 1
-
-            # structured insights
-            structured = _extract_structured_fields(a)
-            if structured.get("customer_sentiment"):
-                lbl = str(structured["customer_sentiment"]).strip()
-                sentiment_labels[lbl] = sentiment_labels.get(lbl, 0) + 1
-            if structured.get("call_categorization"):
-                cat = str(structured["call_categorization"]).strip()
-                categories[cat] = categories.get(cat, 0) + 1
-            if structured.get("resolution_status"):
-                rs = str(structured["resolution_status"]).strip()
-                resolution_status[rs] = resolution_status.get(rs, 0) + 1
-            if structured.get("main_subject"):
-                subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
-            if structured.get("services"):
-                # split on comma or semicolon into multiple services
-                sv = structured["services"]
-                if isinstance(sv, str):
-                    parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
-                    for p in parts:
-                        services[p] = services.get(p, 0) + 1
-                elif isinstance(sv, list):
-                    for p in sv:
-                        services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
-            # Agent professionalism/attitude histogram
-            if structured.get("agent_professionalism"):
-                att = str(structured.get("agent_professionalism")).strip()
-                if att:
-                    agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
-            # AHT and times
-            aht = structured.get("aht")
-            if isinstance(aht, dict):
-                try:
-                    aht_values.append(float(aht.get("score")))
-                except Exception:
-                    pass
-            if structured.get("talk_time_seconds") is not None:
-                try:
-                    talk_values.append(float(structured.get("talk_time_seconds")))
-                except Exception:
-                    pass
-            if structured.get("hold_time_seconds") is not None:
-                try:
-                    hold_values.append(float(structured.get("hold_time_seconds")))
-                except Exception:
-                    pass
-
-        overall_insights = None
-        if summaries:
-            try:
-                overall_insights = azure_oai.get_insights(summaries)
-            except Exception:
-                overall_insights = None
-
-        total = len(calls)
-        avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else None
-        avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
-        avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
-        avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
-        result = {
-            "total_calls": total,
-            "avg_sentiment": avg_sentiment,
-            "sentiment_labels": sentiment_labels,
-            "dispositions": dispositions,
-            "categories": categories,
-            "resolution_status": resolution_status,
-            "subjects": subjects,
-            "services": services,
-            "agent_professionalism": agent_professionalism,
-            "resolved_rate": (resolved_count / total) if total else None,
-            "avg_aht_seconds": avg_aht,
-            "avg_talk_seconds": avg_talk,
-            "avg_hold_seconds": avg_hold,
-            "overall_insights": overall_insights,
-        }
-        _cache_set("dashboard_summary", result)
     
+    # Update dashboard summary after processing all files
+    try:
+        print("Updating dashboard summary after file processing...")
+        dashboard_data = calculate_dashboard_summary()
+        save_dashboard_summary_to_blob(dashboard_data)
+        print("Dashboard summary updated successfully")
+    except Exception as e:
+        print(f"Error updating dashboard summary: {e}")
     
     return {"status": "ok", "processed": results}
 
@@ -982,123 +936,23 @@ def get_call(call_id: str) -> Dict[str, Any]:
 
 @app.route('/dashboard/summary', methods=['GET'])
 def dashboard_summary() -> Dict[str, Any]:
-    # cache summary for a short time window to avoid re-computation on navigation
+    # First try to load from blob storage cache
+    cached_blob_data = load_dashboard_summary_from_blob()
+    if cached_blob_data is not None:
+        # Remove metadata fields before returning
+        result = {k: v for k, v in cached_blob_data.items() 
+                 if k not in ["cached_at", "cache_version"]}
+        print("Dashboard summary loaded from blob storage cache")
+        return result
+    
+    # Fallback: try in-memory cache
     cached = _cache_get("dashboard_summary", ttl_seconds=3600)
     if cached is not None:
         return cached
 
-    calls = list_calls()
-    summaries: List[str] = []
-    sentiment_scores: List[float] = []
-    sentiment_labels: Dict[str, int] = {}
-    dispositions: Dict[str, int] = {}
-    categories: Dict[str, int] = {}
-    resolution_status: Dict[str, int] = {}
-    subjects: Dict[str, int] = {}
-    services: Dict[str, int] = {}
-    agent_professionalism: Dict[str, int] = {}
-    resolved_count = 0
-    aht_values: List[float] = []
-    talk_values: List[float] = []
-    hold_values: List[float] = []
-
-    for c in calls:
-        a = c.get("analysis") or {}
-        if isinstance(a, dict) and a.get("summary"):
-            summaries.append(a["summary"]) 
-        # sentiment numeric (1-5)
-        s = a.get("sentiment", {})
-        if isinstance(s, dict):
-            score = s.get("score")
-            try:
-                sentiment_scores.append(float(score))
-            except Exception:
-                pass
-        # disposition counts
-        disp = a.get("disposition") or a.get("Disposition")
-        if isinstance(disp, dict):
-            dscore = disp.get("score")
-            if dscore:
-                dispositions[str(dscore)] = dispositions.get(str(dscore), 0) + 1
-        # resolved
-        resolved = a.get("resolved")
-        if isinstance(resolved, dict) and resolved.get("score") is True:
-            resolved_count += 1
-
-        # structured insights
-        structured = _extract_structured_fields(a)
-        if structured.get("customer_sentiment"):
-            lbl = str(structured["customer_sentiment"]).strip()
-            sentiment_labels[lbl] = sentiment_labels.get(lbl, 0) + 1
-        if structured.get("call_categorization"):
-            cat = str(structured["call_categorization"]).strip()
-            categories[cat] = categories.get(cat, 0) + 1
-        if structured.get("resolution_status"):
-            rs = str(structured["resolution_status"]).strip()
-            resolution_status[rs] = resolution_status.get(rs, 0) + 1
-        if structured.get("main_subject"):
-            subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
-        if structured.get("services"):
-            # split on comma or semicolon into multiple services
-            sv = structured["services"]
-            if isinstance(sv, str):
-                parts = [p.strip() for p in sv.replace(";", ",").split(",") if p.strip()]
-                for p in parts:
-                    services[p] = services.get(p, 0) + 1
-            elif isinstance(sv, list):
-                for p in sv:
-                    services[str(p).strip()] = services.get(str(p).strip(), 0) + 1
-        # Agent professionalism/attitude histogram
-        if structured.get("agent_professionalism"):
-            att = str(structured.get("agent_professionalism")).strip()
-            if att:
-                agent_professionalism[att] = agent_professionalism.get(att, 0) + 1
-        # AHT and times
-        aht = structured.get("aht")
-        if isinstance(aht, dict):
-            try:
-                aht_values.append(float(aht.get("score")))
-            except Exception:
-                pass
-        if structured.get("talk_time_seconds") is not None:
-            try:
-                talk_values.append(float(structured.get("talk_time_seconds")))
-            except Exception:
-                pass
-        if structured.get("hold_time_seconds") is not None:
-            try:
-                hold_values.append(float(structured.get("hold_time_seconds")))
-            except Exception:
-                pass
-
-    overall_insights = None
-    if summaries:
-        try:
-            overall_insights = azure_oai.get_insights(summaries)
-        except Exception:
-            overall_insights = None
-
-    total = len(calls)
-    avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else None
-    avg_aht = sum(aht_values) / len(aht_values) if aht_values else None
-    avg_talk = sum(talk_values) / len(talk_values) if talk_values else None
-    avg_hold = sum(hold_values) / len(hold_values) if hold_values else None
-    result = {
-        "total_calls": total,
-        "avg_sentiment": avg_sentiment,
-        "sentiment_labels": sentiment_labels,
-        "dispositions": dispositions,
-        "categories": categories,
-        "resolution_status": resolution_status,
-        "subjects": subjects,
-        "services": services,
-        "agent_professionalism": agent_professionalism,
-        "resolved_rate": (resolved_count / total) if total else None,
-        "avg_aht_seconds": avg_aht,
-        "avg_talk_seconds": avg_talk,
-        "avg_hold_seconds": avg_hold,
-        "overall_insights": overall_insights,
-    }
+    # Last resort: calculate fresh data
+    print("Calculating fresh dashboard summary data")
+    result = calculate_dashboard_summary()
     _cache_set("dashboard_summary", result)
     return result
 
@@ -1471,6 +1325,42 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
                 "Check network connectivity to Azure Search"
             ]
         }
+
+@app.route('/refresh-dashboard-cache', methods=['POST', 'OPTIONS'])
+def refresh_dashboard_cache() -> Dict[str, Any]:
+    """Manually refresh the dashboard summary cache in blob storage."""
+    # Handle OPTIONS preflight request
+    if request.method == 'OPTIONS':
+        return {"status": "ok"}
+        
+    try:
+        print("Manually refreshing dashboard summary cache...")
+        
+        # Calculate fresh dashboard summary
+        dashboard_data = calculate_dashboard_summary()
+        
+        # Save to blob storage
+        success = save_dashboard_summary_to_blob(dashboard_data)
+        
+        if success:
+            return {
+                "status": "success",
+                "message": "Dashboard summary cache refreshed successfully",
+                "total_calls": dashboard_data.get("total_calls", 0),
+                "cached_at": datetime.utcnow().isoformat()
+            }
+        else:
+            return {
+                "status": "error",
+                "message": "Failed to save dashboard summary to blob storage"
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error refreshing dashboard cache: {str(e)}"
+        }
+
 
 @app.route('/reindex-all-calls', methods=['POST', 'OPTIONS'])
 def reindex_all_calls() -> Dict[str, Any]:
