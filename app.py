@@ -292,6 +292,45 @@ def _cache_get(key: str, ttl_seconds: int = 86400) -> Any | None:  # Default 24 
     
     return entry.get("data")
 
+
+def _check_blob_changes() -> bool:
+    """Check if blob storage has changed by comparing file counts and timestamps."""
+    try:
+        container = azure_storage.blob_service_client.get_container_client(azure_storage.DEFAULT_CONTAINER)
+        
+        # Get current audio files
+        audio_exts = (".mp3", ".wav", ".m4a", ".mp4")
+        audio_blobs = list(container.list_blobs(name_starts_with=f"{azure_storage.AUDIO_FOLDER}/"))
+        if not audio_blobs:
+            audio_blobs = [b for b in container.list_blobs() if any(b.name.lower().endswith(ext) for ext in audio_exts)]
+        
+        # Create a signature of current state
+        current_signature = {
+            "count": len(audio_blobs),
+            "files": sorted([b.name for b in audio_blobs]),
+            "last_modified": max([b.last_modified.timestamp() for b in audio_blobs]) if audio_blobs else 0
+        }
+        
+        # Check against cached signature
+        cached_signature = _CACHE.get("_blob_signature")
+        if cached_signature is None:
+            # First time, cache the signature
+            _CACHE["_blob_signature"] = {"data": current_signature, "ts": datetime.utcnow().timestamp(), "version": _get_cache_version()}
+            return False
+        
+        # Compare signatures
+        if cached_signature.get("data") != current_signature:
+            print(f"Blob storage changed: {cached_signature.get('data')} -> {current_signature}")
+            _invalidate_cache()
+            _CACHE["_blob_signature"] = {"data": current_signature, "ts": datetime.utcnow().timestamp(), "version": _get_cache_version()}
+            return True
+        
+        return False
+        
+    except Exception as e:
+        print(f"Error checking blob changes: {e}")
+        return False
+
 def _cache_set(key: str, value: Any) -> None:
     """Set cached data with current version."""
     _CACHE[key] = {
@@ -913,10 +952,13 @@ def list_calls() -> List[Dict[str, Any]]:
 
         cache_key = f"calls:page={page}:size={page_size}:light={int(light)}"
         if not refresh:
-            # Use smart cache with long TTL (24 hours) - only invalidated on changes
-            cached = _cache_get(cache_key, ttl_seconds=86400)  # 24 hours
-            if cached is not None:
-                return cached
+            # Check if blob storage has changed before using cache
+            blob_changed = _check_blob_changes()
+            if not blob_changed:
+                # Use smart cache with long TTL (24 hours) - only invalidated on changes
+                cached = _cache_get(cache_key, ttl_seconds=86400)  # 24 hours
+                if cached is not None:
+                    return cached
 
         # Ensure container exists
         azure_storage.ensure_container_exists(azure_storage.DEFAULT_CONTAINER)
@@ -1037,19 +1079,22 @@ def dashboard_summary() -> Dict[str, Any]:
     force_refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
     
     if not force_refresh:
-        # First try to load from blob storage cache
-        cached_blob_data = load_dashboard_summary_from_blob()
-        if cached_blob_data is not None:
-            # Remove metadata fields before returning
-            result = {k: v for k, v in cached_blob_data.items() 
-                     if k not in ["cached_at", "cache_version"]}
-            print("Dashboard summary loaded from blob storage cache")
-            return result
-        
-        # Fallback: try in-memory cache with long TTL (only invalidated on changes)
-        cached = _cache_get("dashboard_summary", ttl_seconds=86400)  # 24 hours
-        if cached is not None:
-            return cached
+        # Check if blob storage has changed before using cache
+        blob_changed = _check_blob_changes()
+        if not blob_changed:
+            # First try to load from blob storage cache
+            cached_blob_data = load_dashboard_summary_from_blob()
+            if cached_blob_data is not None:
+                # Remove metadata fields before returning
+                result = {k: v for k, v in cached_blob_data.items() 
+                         if k not in ["cached_at", "cache_version"]}
+                print("Dashboard summary loaded from blob storage cache")
+                return result
+            
+            # Fallback: try in-memory cache with long TTL (only invalidated on changes)
+            cached = _cache_get("dashboard_summary", ttl_seconds=86400)  # 24 hours
+            if cached is not None:
+                return cached
 
     # Calculate fresh data (either forced refresh or no cache available)
     print("Calculating fresh dashboard summary data")
