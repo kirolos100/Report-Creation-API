@@ -233,19 +233,51 @@ Don't change any key names or structure. You must return all keys shown above.
 
 
 
+# Global Mongo client for connection reuse
+_mongo_client = None
+
 def _get_mongo_client() -> MongoClient | None:
-    """Create or reuse a Mongo client.
+    """Create or reuse a Mongo client with optimized connection settings.
     Uses env var MONGO_URI; falls back to provided Cosmos Mongo connection string.
     """
+    global _mongo_client
+    
+    if _mongo_client is not None:
+        try:
+            # Test if connection is still alive
+            _mongo_client.admin.command('ping')
+            return _mongo_client
+        except Exception:
+            # Connection is dead, recreate
+            _mongo_client = None
+    
     try:
         uri = os.getenv("MONGO_URI") or (
             "mongodb://elaraby:Nobq634p5m7vWAHj7OdMozizEilPLCmQbUhC9ZSiCyO7R8utvS3YuLOQp53eddGa3chb9Mrc8W9XACDbANN8og==@"
             "elaraby.mongo.cosmos.azure.com:10255/?ssl=true&retrywrites=false&replicaSet=globaldb&maxIdleTimeMS=120000&appName=@elaraby@"
         )
-        client = MongoClient(uri)
-        return client
+        
+        # Optimized connection settings for better performance
+        _mongo_client = MongoClient(
+            uri,
+            maxPoolSize=10,  # Maximum number of connections in the pool
+            minPoolSize=2,   # Minimum number of connections in the pool
+            maxIdleTimeMS=30000,  # Close connections after 30 seconds of inactivity
+            connectTimeoutMS=10000,  # 10 second connection timeout
+            serverSelectionTimeoutMS=5000,  # 5 second server selection timeout
+            socketTimeoutMS=20000,  # 20 second socket timeout
+            retryWrites=False,  # Disable retry writes for Cosmos DB
+            retryReads=False,   # Disable retry reads for Cosmos DB
+        )
+        
+        # Test the connection
+        _mongo_client.admin.command('ping')
+        print("MongoDB connection established successfully")
+        return _mongo_client
+        
     except Exception as e:
         print(f"Mongo client init failed: {e}")
+        _mongo_client = None
         return None
 
 
@@ -1161,7 +1193,11 @@ def dashboard_summary() -> Dict[str, Any]:
     # Always prefer Mongo for zero-delay reads
     mongo_doc = mongo_get_dashboard_summary()
     if mongo_doc is not None:
-        return mongo_doc
+        response = jsonify(mongo_doc)
+        # Add caching headers for better performance
+        response.headers['Cache-Control'] = 'public, max-age=60'  # Cache for 1 minute
+        response.headers['ETag'] = f'"{mongo_doc.get("updated_at", "unknown")}"'
+        return response
 
     # Not found in Mongo: compute and persist, then return
     print("Mongo empty: calculating dashboard summary and upserting")
@@ -1175,7 +1211,11 @@ def dashboard_summary() -> Dict[str, Any]:
         save_dashboard_summary_to_blob(result)
     except Exception:
         pass
-    return result
+    
+    response = jsonify(result)
+    response.headers['Cache-Control'] = 'public, max-age=60'
+    response.headers['ETag'] = f'"{result.get("updated_at", "unknown")}"'
+    return response
 
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
@@ -1190,20 +1230,31 @@ def get_insights() -> Dict[str, Any]:
             except Exception:
                 pass
             doc = summary
-        return {
+        
+        result = {
             "status": "ok",
             "comprehensive_insights": doc.get("overall_insights"),
             "total_calls": doc.get("total_calls", 0),
             "summaries_found": doc.get("calls_with_analysis", 0),
         }
+        
+        response = jsonify(result)
+        # Add caching headers for better performance
+        response.headers['Cache-Control'] = 'public, max-age=60'  # Cache for 1 minute
+        response.headers['ETag'] = f'"{doc.get("updated_at", "unknown")}"'
+        return response
+        
     except Exception as e:
-        return {
+        result = {
             "status": "error",
             "message": str(e),
             "comprehensive_insights": None,
             "total_calls": 0,
             "summaries_found": 0,
         }
+        response = jsonify(result)
+        response.headers['Cache-Control'] = 'no-cache'
+        return response
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
 def chat_with_data():
