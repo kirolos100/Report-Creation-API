@@ -11,6 +11,9 @@ from openai import AzureOpenAI
 from flasgger import Swagger, swag_from
 from flask_swagger_ui import get_swaggerui_blueprint
 from flask_cors import CORS  # Import CORS
+from pymongo import MongoClient
+from pymongo.collection import Collection
+from pymongo.errors import PyMongoError
 
 app = Flask(__name__)
 
@@ -237,6 +240,75 @@ Don't change any key names or structure. You must return all keys shown above.
 
 
 
+
+def _get_mongo_client() -> MongoClient | None:
+    """Create or reuse a Mongo client.
+    Uses env var MONGO_URI; falls back to provided Cosmos Mongo connection string.
+    """
+    try:
+        uri = os.getenv("MONGO_URI") or (
+            "mongodb://elaraby:1n90mZ6caznPJCjlW4o1bXgCtH9YJFoimay4pz27UdrgsJsZSWTYkviO2SK9j67l6lDOcARZK9VEACDbJi64qw==@"
+            "elaraby.mongo.cosmos.azure.com:10255/?ssl=true&retrywrites=false&replicaSet=globaldb&maxIdleTimeMS=120000&appName=@elaraby@"
+        )
+        client = MongoClient(uri)
+        return client
+    except Exception as e:
+        print(f"Mongo client init failed: {e}")
+        return None
+
+
+def _get_dashboard_collection(client: MongoClient | None) -> Collection | None:
+    """Return the collection used to store dashboard summaries."""
+    if client is None:
+        return None
+    try:
+        db_name = os.getenv("MONGO_DB", "elaraby")
+        coll_name = os.getenv("MONGO_DASHBOARD_COLLECTION", "dashboard_summaries")
+        return client[db_name][coll_name]
+    except Exception as e:
+        print(f"Mongo get collection failed: {e}")
+        return None
+
+
+def mongo_upsert_dashboard_summary(summary: Dict[str, Any]) -> bool:
+    """Upsert the latest dashboard summary into Mongo for instant reads."""
+    try:
+        client = _get_mongo_client()
+        coll = _get_dashboard_collection(client)
+        if coll is None:
+            return False
+        doc = dict(summary or {})
+        doc["_id"] = "dashboard_summary_latest"
+        doc["updated_at"] = datetime.utcnow()
+        coll.replace_one({"_id": doc["_id"]}, doc, upsert=True)
+        return True
+    except PyMongoError as e:
+        print(f"Mongo upsert error: {e}")
+        return False
+    except Exception as e:
+        print(f"Mongo upsert unexpected error: {e}")
+        return False
+
+
+def mongo_get_dashboard_summary() -> Dict[str, Any] | None:
+    """Fetch the latest dashboard summary from Mongo if present."""
+    try:
+        client = _get_mongo_client()
+        coll = _get_dashboard_collection(client)
+        if coll is None:
+            return None
+        doc = coll.find_one({"_id": "dashboard_summary_latest"})
+        if not doc:
+            return None
+        # Remove internal fields
+        doc.pop("_id", None)
+        return doc
+    except PyMongoError as e:
+        print(f"Mongo get error: {e}")
+        return None
+    except Exception as e:
+        print(f"Mongo get unexpected error: {e}")
+        return None
 
 def _parse_json_maybe(text: str) -> Any:
     try:
@@ -533,7 +605,11 @@ def refresh_calls_and_dashboard() -> Dict[str, Any]:
         # Calculate fresh dashboard summary
         dashboard_data = calculate_dashboard_summary()
         
-        # Save updated dashboard to blob storage
+        # Save updated dashboard to Mongo and Blob storage
+        try:
+            mongo_upsert_dashboard_summary(dashboard_data)
+        except Exception:
+            pass
         save_dashboard_summary_to_blob(dashboard_data)
         
         return {
@@ -917,6 +993,13 @@ def upload_complete_pipeline() -> Dict[str, Any]:
         
         # Calculate fresh dashboard summary
         dashboard_data = calculate_dashboard_summary()
+        # Persist to Mongo for instant reads
+        try:
+            mongo_ok = mongo_upsert_dashboard_summary(dashboard_data)
+            print(f"Mongo upsert dashboard summary: {mongo_ok}")
+        except Exception as e:
+            print(f"Warning: Mongo upsert failed: {e}")
+        # Persist to Blob as secondary store
         save_dashboard_summary_to_blob(dashboard_data)
         
         print("Dashboard summary updated and cache invalidated successfully")
@@ -1079,6 +1162,12 @@ def dashboard_summary() -> Dict[str, Any]:
     force_refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
     
     if not force_refresh:
+        # Prefer Mongo (fast) if available
+        mongo_doc = mongo_get_dashboard_summary()
+        if mongo_doc is not None:
+            print("Dashboard summary loaded from Mongo cache")
+            return mongo_doc
+
         # Check if blob storage has changed before using cache
         blob_changed = _check_blob_changes()
         if not blob_changed:
@@ -1100,7 +1189,12 @@ def dashboard_summary() -> Dict[str, Any]:
     print("Calculating fresh dashboard summary data")
     result = calculate_dashboard_summary()
     _cache_set("dashboard_summary", result)
-    
+    # Also write to Mongo and Blob for persistence and fast reads
+    try:
+        mongo_upsert_dashboard_summary(result)
+    except Exception:
+        pass
+
     # Also save to blob storage for persistence
     try:
         save_dashboard_summary_to_blob(result)
@@ -1567,6 +1661,10 @@ def force_refresh_all() -> Dict[str, Any]:
         
         # Calculate fresh dashboard summary
         dashboard_data = calculate_dashboard_summary()
+        try:
+            mongo_upsert_dashboard_summary(dashboard_data)
+        except Exception:
+            pass
         save_dashboard_summary_to_blob(dashboard_data)
         
         return {
