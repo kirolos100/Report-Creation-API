@@ -72,29 +72,21 @@ def add_cors_headers(response):
 def read_root():
     # Health check without forcing cache invalidation
     try:
-        # Try to get cached dashboard data first
-        cached_blob_data = load_dashboard_summary_from_blob()
-        if cached_blob_data is not None:
-            return {
-                "status": "healthy", 
-                "message": "API is running",
-                "dashboard_summary_cached": True,
-                "total_calls": cached_blob_data.get("total_calls", 0),
-                "calls_with_analysis": cached_blob_data.get("calls_with_analysis", 0),
-                "cache_version": _get_cache_version(),
-                "last_change": datetime.fromtimestamp(_LAST_CHANGE_TIMESTAMP).isoformat() if _LAST_CHANGE_TIMESTAMP > 0 else "Never"
-            }
-        
-        # If no cached data, calculate fresh
-        dashboard_data = calculate_dashboard_summary()
-        save_dashboard_summary_to_blob(dashboard_data)
-        
+        # Prefer Mongo for dashboard info; compute and upsert if missing
+        mongo_doc = mongo_get_dashboard_summary()
+        if mongo_doc is None:
+            dashboard_data = calculate_dashboard_summary()
+            try:
+                mongo_upsert_dashboard_summary(dashboard_data)
+            except Exception:
+                pass
+            mongo_doc = dashboard_data
         return {
             "status": "healthy", 
             "message": "API is running",
             "dashboard_summary_cached": True,
-            "total_calls": dashboard_data.get("total_calls", 0),
-            "calls_with_analysis": dashboard_data.get("calls_with_analysis", 0),
+            "total_calls": mongo_doc.get("total_calls", 0),
+            "calls_with_analysis": mongo_doc.get("calls_with_analysis", 0),
             "cache_version": _get_cache_version(),
             "last_change": datetime.fromtimestamp(_LAST_CHANGE_TIMESTAMP).isoformat() if _LAST_CHANGE_TIMESTAMP > 0 else "Never"
         }
@@ -430,7 +422,6 @@ def save_dashboard_summary_to_blob(dashboard_data: Dict[str, Any]) -> bool:
             json_data.encode('utf-8'),
             "dashboard_summary.json",
             prefix="cache",
-            container_name=azure_storage.DEFAULT_CONTAINER
         )
         
         print("Dashboard summary saved to blob storage successfully")
@@ -447,7 +438,6 @@ def load_dashboard_summary_from_blob() -> Dict[str, Any] | None:
         json_content = azure_storage.read_blob(
             "dashboard_summary.json",
             prefix="cache",
-            container_name=azure_storage.DEFAULT_CONTAINER
         )
         
         if json_content:
@@ -898,6 +888,13 @@ def upload_complete_pipeline() -> Dict[str, Any]:
             print(f"Processing {filename}: Step 1 - Uploading to blob storage...")
             azure_storage.upload_blob(content, filename, prefix=azure_storage.AUDIO_FOLDER)
             name_no_ext = filename.rsplit(".", 1)[0]
+
+            # Provisional: immediately upsert a fresh dashboard summary so UI can read updated counts without waiting
+            try:
+                provisional_summary = calculate_dashboard_summary()
+                mongo_upsert_dashboard_summary(provisional_summary)
+            except Exception as e:
+                print(f"Warning: provisional dashboard upsert failed: {e}")
             
             # Step 2: Transcribe audio using Azure Speech services
             print(f"Processing {filename}: Step 2 - Transcribing with Azure Speech...")
@@ -1158,142 +1155,54 @@ def get_call(call_id: str) -> Dict[str, Any]:
 
 @app.route('/dashboard/summary', methods=['GET'])
 def dashboard_summary() -> Dict[str, Any]:
-    # Check if we should force refresh
-    force_refresh = request.args.get('refresh', '0') in ('1', 'true', 'True')
-    
-    if not force_refresh:
-        # Prefer Mongo (fast) if available
-        mongo_doc = mongo_get_dashboard_summary()
-        if mongo_doc is not None:
-            print("Dashboard summary loaded from Mongo cache")
-            return mongo_doc
+    """Return dashboard summary strictly from MongoDB.
+    If absent, compute once, upsert to Mongo, and return that.
+    """
+    # Always prefer Mongo for zero-delay reads
+    mongo_doc = mongo_get_dashboard_summary()
+    if mongo_doc is not None:
+        return mongo_doc
 
-        # Check if blob storage has changed before using cache
-        blob_changed = _check_blob_changes()
-        if not blob_changed:
-            # First try to load from blob storage cache
-            cached_blob_data = load_dashboard_summary_from_blob()
-            if cached_blob_data is not None:
-                # Remove metadata fields before returning
-                result = {k: v for k, v in cached_blob_data.items() 
-                         if k not in ["cached_at", "cache_version"]}
-                print("Dashboard summary loaded from blob storage cache")
-                return result
-            
-            # Fallback: try in-memory cache with long TTL (only invalidated on changes)
-            cached = _cache_get("dashboard_summary", ttl_seconds=86400)  # 24 hours
-            if cached is not None:
-                return cached
-
-    # Calculate fresh data (either forced refresh or no cache available)
-    print("Calculating fresh dashboard summary data")
+    # Not found in Mongo: compute and persist, then return
+    print("Mongo empty: calculating dashboard summary and upserting")
     result = calculate_dashboard_summary()
-    _cache_set("dashboard_summary", result)
-    # Also write to Mongo and Blob for persistence and fast reads
     try:
         mongo_upsert_dashboard_summary(result)
     except Exception:
         pass
-
-    # Also save to blob storage for persistence
+    # Best-effort persist to blob as secondary store
     try:
         save_dashboard_summary_to_blob(result)
-    except Exception as e:
-        print(f"Warning: Could not save dashboard summary to blob storage: {e}")
-    
+    except Exception:
+        pass
     return result
 
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
-    """Get AI-generated comprehensive insights from all call summaries"""
+    """Return precomputed overall insights directly from MongoDB without regeneration."""
     try:
-        calls = list_calls()
-        summaries: List[str] = []
-        
-        print(f"DEBUG: Found {len(calls)} total calls")
-        
-        # Collect all call summaries (both top-level and nested)
-        for c in calls:
-            a = c.get("analysis") or {}
-            if isinstance(a, dict):
-                # Try top-level summary first
-                if a.get("summary"):
-                    summaries.append(a["summary"])
-                    print(f"DEBUG: Added top-level summary for call {c.get('call_id', 'unknown')}")
-                # Try nested summary as fallback
-                elif a.get("Call Generated Insights", {}).get("summary"):
-                    summaries.append(a["Call Generated Insights"]["summary"])
-                    print(f"DEBUG: Added nested summary for call {c.get('call_id', 'unknown')}")
-                else:
-                    print(f"DEBUG: No summary found for call {c.get('call_id', 'unknown')}")
-        
-        print(f"DEBUG: Collected {len(summaries)} summaries out of {len(calls)} calls")
-        
-        # Generate comprehensive insights
-        comprehensive_insights = None
-        if summaries:
+        doc = mongo_get_dashboard_summary()
+        if doc is None:
+            # Bootstrap by computing once, persisting, then returning
+            summary = calculate_dashboard_summary()
             try:
-                print(f"DEBUG: Generating insights from {len(summaries)} summaries")
-                
-                # Enhanced prompt for better insights
-                summary_prompt = """
-                You are an expert call center analyst. Based on the following call summaries, provide a comprehensive analysis that includes:
-
-                **Overall Call Volume and Patterns**
-                - General patterns and trends observed
-
-                **Main Issues and Topics**
-                - Most common problems or subjects discussed
-                - Recurring themes across calls
-
-                **Customer Satisfaction Analysis**
-                - Overall sentiment trends
-                - Customer satisfaction levels
-                - Areas of concern
-
-                **Agent Performance Assessment**
-                - How well agents are handling calls
-                - Professionalism levels
-                - Areas for improvement
-
-                **Key Insights and Observations**
-                - Important patterns and trends
-                - Notable findings
-                - Critical issues identified
-
-                **Actionable Recommendations**
-                - Specific suggestions for improvement
-                - Process enhancements
-                - Training needs
-
-                Write this as a professional, well-structured analysis with clear sections and bullet points where appropriate. Focus on providing actionable insights that management can use to improve call center operations.
-                """
-                
-                comprehensive_insights = azure_oai.call_llm(summary_prompt, "\n\n".join(summaries))
-                print(f"DEBUG: Successfully generated comprehensive insights")
-                
-            except Exception as e:
-                print(f"ERROR generating insights: {e}")
-                comprehensive_insights = f"Error generating insights: {str(e)}"
-        else:
-            print("DEBUG: No summaries found to generate insights from")
-            comprehensive_insights = "No insights available yet. Please upload some audio files to generate insights."
-        
+                mongo_upsert_dashboard_summary(summary)
+            except Exception:
+                pass
+            doc = summary
         return {
             "status": "ok",
-            "comprehensive_insights": comprehensive_insights,
-            "total_calls": len(calls),
-            "summaries_found": len(summaries)
+            "comprehensive_insights": doc.get("overall_insights"),
+            "total_calls": doc.get("total_calls", 0),
+            "summaries_found": doc.get("calls_with_analysis", 0),
         }
-        
     except Exception as e:
-        print(f"ERROR in /insights endpoint: {e}")
         return {
             "status": "error",
-            "message": f"Failed to generate insights: {str(e)}",
-            "comprehensive_insights": f"Error: {str(e)}",
+            "message": str(e),
+            "comprehensive_insights": None,
             "total_calls": 0,
-            "summaries_found": 0
+            "summaries_found": 0,
         }
 
 @app.route('/chat', methods=['POST', 'OPTIONS'])
@@ -1571,6 +1480,96 @@ def diagnose_search_index(index_name: str) -> Dict[str, Any]:
                 "Verify API keys and endpoints",
                 "Check network connectivity to Azure Search"
             ]
+        }
+
+
+@app.route('/diagnostics/mongo', methods=['GET'])
+def diagnose_mongo() -> Dict[str, Any]:
+    """Check MongoDB connectivity and ensure dashboard collection/document exist.
+    If the dashboard summary document does not exist, compute and upsert it.
+    Returns connection info and a compact view of the stored summary.
+    """
+    try:
+        uri = os.getenv("MONGO_URI") or "cosmos-default"
+        db_name = os.getenv("MONGO_DB", "elaraby")
+        coll_name = os.getenv("MONGO_DASHBOARD_COLLECTION", "dashboard_summaries")
+
+        client = _get_mongo_client()
+        if client is None:
+            return {
+                "status": "error",
+                "message": "Unable to initialize Mongo client",
+                "mongo_uri": uri,
+                "db": db_name,
+                "collection": coll_name,
+            }
+
+        coll = _get_dashboard_collection(client)
+        if coll is None:
+            return {
+                "status": "error",
+                "message": "Unable to access Mongo collection",
+                "mongo_uri": uri,
+                "db": db_name,
+                "collection": coll_name,
+            }
+
+        # Try to fetch the latest summary
+        doc = coll.find_one({"_id": "dashboard_summary_latest"})
+        created = False
+        if not doc:
+            # Compute and upsert fresh summary
+            fresh = calculate_dashboard_summary()
+            mongo_upsert_dashboard_summary(fresh)
+            doc = coll.find_one({"_id": "dashboard_summary_latest"})
+            created = True
+
+        if not doc:
+            return {
+                "status": "error",
+                "message": "Dashboard summary document not found after upsert attempt",
+                "mongo_uri": uri,
+                "db": db_name,
+                "collection": coll_name,
+            }
+
+        # Build compact response
+        compact = {k: doc.get(k) for k in [
+            "total_calls",
+            "calls_with_analysis",
+            "avg_sentiment",
+            "resolved_rate",
+            "avg_aht_seconds",
+            "avg_talk_seconds",
+            "avg_hold_seconds",
+        ] if k in doc}
+
+        # Include small samples of histogram keys for visibility
+        def top_keys(d: Any, n: int = 5) -> Dict[str, Any]:
+            if isinstance(d, dict):
+                items = sorted(d.items(), key=lambda x: (-int(x[1]) if str(x[1]).isdigit() else 0, str(x[0])))
+                return {k: v for k, v in items[:n]}
+            return {}
+
+        compact["sentiment_labels"] = top_keys(doc.get("sentiment_labels"), 5)
+        compact["dispositions"] = top_keys(doc.get("dispositions"), 5)
+        compact["categories"] = top_keys(doc.get("categories"), 5)
+        compact["agent_professionalism"] = top_keys(doc.get("agent_professionalism"), 5)
+
+        return {
+            "status": "ok",
+            "created_now": created,
+            "mongo_uri": uri,
+            "db": db_name,
+            "collection": coll_name,
+            "document_id": doc.get("_id", "dashboard_summary_latest"),
+            "updated_at": str(doc.get("updated_at")),
+            "summary_compact": compact,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
         }
 
 @app.route('/refresh-dashboard-cache', methods=['POST', 'OPTIONS'])
