@@ -239,7 +239,7 @@ def _get_mongo_client() -> MongoClient | None:
     """
     try:
         uri = os.getenv("MONGO_URI") or (
-            "mongodb://elaraby:1n90mZ6caznPJCjlW4o1bXgCtH9YJFoimay4pz27UdrgsJsZSWTYkviO2SK9j67l6lDOcARZK9VEACDbJi64qw==@"
+            "mongodb://elaraby:Nobq634p5m7vWAHj7OdMozizEilPLCmQbUhC9ZSiCyO7R8utvS3YuLOQp53eddGa3chb9Mrc8W9XACDbANN8og==@"
             "elaraby.mongo.cosmos.azure.com:10255/?ssl=true&retrywrites=false&replicaSet=globaldb&maxIdleTimeMS=120000&appName=@elaraby@"
         )
         client = MongoClient(uri)
