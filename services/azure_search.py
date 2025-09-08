@@ -362,7 +362,29 @@ def load_json_into_azure_search(index_name, json_docs):
     for i, doc in enumerate(json_docs):
         flattened = flatten_json(doc)
         flattened = harmonize_flattened(flattened)
-        doc_id = f"doc-{i}"
+        # Prefer a stable unique ID from the document if available
+        # Try common keys or fall back to a hashed content-based id
+        try:
+            preferred_id = None
+            # Look up likely id keys in both original and flattened docs
+            for key in [
+                "id", "call_id", "callId", "audio_name", "audioName",
+                "Call_ID", "CallId", "Audio_Name"
+            ]:
+                if isinstance(doc, dict) and key in doc and doc.get(key):
+                    preferred_id = str(doc.get(key))
+                    break
+                if key in flattened and flattened.get(key):
+                    preferred_id = str(flattened.get(key))
+                    break
+            if not preferred_id:
+                # Derive deterministic id from a subset of significant fields
+                import hashlib
+                important_text = json.dumps(doc, sort_keys=True)[:2048]
+                preferred_id = hashlib.sha1(important_text.encode("utf-8")).hexdigest()
+            doc_id = preferred_id
+        except Exception:
+            doc_id = f"doc-{i}"
 
         # We'll build a 'content' string from all string fields
         text_parts = []
