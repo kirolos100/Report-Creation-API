@@ -972,9 +972,13 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 print(f"Current index document count: {current_count}")
                 
                 # Load the analysis JSON into the marketing_sentiment_details index
+                # Ensure a stable document id based on the call id (filename without extension)
+                analysis_payload = dict(analysis_json) if isinstance(analysis_json, dict) else {"raw": analysis_json}
+                analysis_payload.setdefault("call_id", name_no_ext)
+                analysis_payload.setdefault("id", name_no_ext)
                 message, success = azure_search.load_json_into_azure_search(
                     "marketing_sentiment_details", 
-                    [analysis_json]
+                    [analysis_payload]
                 )
                 if not success:
                     print(f"Warning: Failed to index {name_no_ext} for search: {message}")
