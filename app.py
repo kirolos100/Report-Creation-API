@@ -1185,6 +1185,94 @@ def get_call(call_id: str) -> Dict[str, Any]:
     }
 
 
+def _delete_call_assets(call_id: str) -> Dict[str, Any]:
+    """Delete audio, transcription, and analysis JSONs for a given call id.
+    Deletes from:
+      - audios/<call_id>.(mp3|wav|m4a|mp4) (whichever exists)
+      - transcriptions/<call_id>.txt
+      - llmanalysis/default/<call_id>.json
+      - llmanalysis/persona/<call_id>.json
+    Returns a dict with details of what was deleted.
+    """
+    deleted: Dict[str, Any] = {
+        "audio_path": None,
+        "transcription": False,
+        "analysis_default": False,
+        "analysis_persona": False,
+    }
+
+    # Delete audio by resolving full path then deleting by path
+    try:
+        audio_path = azure_storage.find_audio_blob_path_for_call_id(call_id)
+        if audio_path:
+            client = azure_storage.blob_service_client.get_blob_client(
+                container=azure_storage.DEFAULT_CONTAINER, blob=audio_path
+            )
+            try:
+                client.delete_blob()
+                deleted["audio_path"] = audio_path
+            except Exception:
+                # best-effort
+                pass
+    except Exception:
+        pass
+
+    # Delete transcription
+    try:
+        azure_storage.delete_transcription(f"{call_id}.txt")
+        deleted["transcription"] = True
+    except Exception:
+        pass
+
+    # Delete analysis JSONs (default and persona)
+    try:
+        azure_storage.delete_blob(f"default/{call_id}.json", prefix=azure_storage.LLM_ANALYSIS_FOLDER)
+        deleted["analysis_default"] = True
+    except Exception:
+        pass
+    try:
+        azure_storage.delete_blob(f"persona/{call_id}.json", prefix=azure_storage.LLM_ANALYSIS_FOLDER)
+        deleted["analysis_persona"] = True
+    except Exception:
+        pass
+
+    return deleted
+
+
+@app.route('/calls/<call_id>', methods=['DELETE', 'OPTIONS'])
+def delete_call(call_id: str) -> Dict[str, Any]:
+    # Handle OPTIONS preflight request
+    if request.method == 'OPTIONS':
+        return {"status": "ok"}
+
+    try:
+        details = _delete_call_assets(call_id)
+
+        # Invalidate caches and refresh dashboard summary
+        _invalidate_cache()
+        dashboard_data = calculate_dashboard_summary()
+        try:
+            mongo_upsert_dashboard_summary(dashboard_data)
+        except Exception:
+            pass
+        save_dashboard_summary_to_blob(dashboard_data)
+
+        return {
+            "status": "success",
+            "message": f"Call '{call_id}' deleted",
+            "deleted": details,
+            "dashboard": {
+                "total_calls": dashboard_data.get("total_calls", 0),
+                "calls_with_analysis": dashboard_data.get("calls_with_analysis", 0),
+            },
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e),
+        }
+
+
 @app.route('/dashboard/summary', methods=['GET'])
 def dashboard_summary() -> Dict[str, Any]:
     """Return dashboard summary strictly from MongoDB.
