@@ -222,6 +222,11 @@ def get_insights(summaries):
     you will be provided with different call summaries, your task is to analyze all the summaries, and return key insights.
 
     What are the main topics? Issues? Insights and recommendations
+    Executive Summary: Begin with 1–2 paragraphs that succinctly summarize overall sentiment, the top 3 issues by priority, and a one-line recommended next step.
+    Key Insights: After the executive summary, present a ranked "Key Insights" section. For each insight produce a single paragraph that begins with a concise insight statement (two-sentences claim) followed by supporting evidence drawn from the call summaries. Each insight paragraph must clearly state: why the insight matters (business or customer impact), quantitative evidence when available (counts, percentages, time ranges), likely root causes or contributing factors, and a recommended corrective action.
+    Top Issues & Ranking: Identify and rank the most common issues or complaints using a combined scoring approach that accounts for both frequency (how many distinct calls mention the issue) and order-of-appearance (earlier/larger clusters). For each top issue produce one paragraph that covers: a concise description of the issue, absolute count and percentage of calls affected (e.g., "45 of 200 calls (22.5%)"), whether the issue shows a rising/declining/stable trend (if timestamps are available), a short anonymized example excerpt, likely root causes (process, training, product, technical), business or operational impact, recommended corrective actions, suggested owner/team for implementation, priority level (High/Medium/Low), and expected measurable benefit.
+    Agent Performance & Coaching: Provide at least one paragraph that highlights effective agent behaviors and common deficiencies. Recommend targeted coaching, scripts, or playbook updates and identify agent behaviors that can be adopted as best practices. 
+    Deliverable: A single, continuous text report meeting the above requirements.
 
     """
     oai_client = get_oai_client()
