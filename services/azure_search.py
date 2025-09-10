@@ -1,3 +1,4 @@
+
 from services import azure_oai
 import json
 from azure.identity import DefaultAzureCredential
@@ -483,3 +484,38 @@ def list_index_documents(index_name: str, top: int = 10) -> list:
     except Exception as e:
         print(f"Error listing documents from index '{index_name}': {e}")
         return []
+
+def delete_document_from_index(index_name: str, document_id: str) -> tuple[bool, str]:
+    """
+    Delete a specific document from the Azure Search index by its ID.
+    Returns (success, message).
+    """
+    try:
+        search_client = get_search_client(index_name)
+        
+        # Create a delete action
+        delete_action = {
+            "@search.action": "delete",
+            "id": document_id
+        }
+        
+        # Execute the delete
+        results = search_client.upload_documents(documents=[delete_action])
+        
+        # Check if delete was successful
+        if results and len(results) > 0:
+            result = results[0]
+            if result.succeeded:
+                print(f"Successfully deleted document '{document_id}' from index '{index_name}'")
+                return True, f"Document '{document_id}' deleted successfully"
+            else:
+                error_msg = result.error_message if hasattr(result, 'error_message') else "Unknown error"
+                print(f"Failed to delete document '{document_id}': {error_msg}")
+                return False, f"Delete failed: {error_msg}"
+        else:
+            return False, "No results returned from delete operation"
+            
+    except Exception as e:
+        error_msg = f"Error deleting document '{document_id}' from index '{index_name}': {e}"
+        print(error_msg)
+        return False, error_msg
