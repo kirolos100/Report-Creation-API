@@ -1196,6 +1196,7 @@ def _delete_call_assets(call_id: str) -> Dict[str, Any]:
       - transcriptions/<call_id>.txt
       - llmanalysis/default/<call_id>.json
       - llmanalysis/persona/<call_id>.json
+      - Azure Search index document
     Returns a dict with details of what was deleted.
     """
     deleted: Dict[str, Any] = {
@@ -1203,6 +1204,7 @@ def _delete_call_assets(call_id: str) -> Dict[str, Any]:
         "transcription": False,
         "analysis_default": False,
         "analysis_persona": False,
+        "search_index": False,
     }
 
     # Delete audio by resolving full path then deleting by path
@@ -1240,6 +1242,18 @@ def _delete_call_assets(call_id: str) -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Delete from Azure Search index
+    try:
+        success, message = azure_search.delete_document_from_index("marketing_sentiment_details", call_id)
+        deleted["search_index"] = success
+        if success:
+            print(f"Deleted call '{call_id}' from search index")
+        else:
+            print(f"Failed to delete call '{call_id}' from search index: {message}")
+    except Exception as e:
+        print(f"Error deleting call '{call_id}' from search index: {e}")
+        pass
+
     return deleted
 
 
@@ -1250,27 +1264,48 @@ def delete_call(call_id: str) -> Dict[str, Any]:
         return {"status": "ok"}
 
     try:
+        print(f"Deleting call '{call_id}' and all associated assets...")
         details = _delete_call_assets(call_id)
 
-        # Invalidate caches and refresh dashboard summary
+        # Force complete cache invalidation - clear all cached data
+        print("Invalidating all caches after deletion...")
         _invalidate_cache()
+        
+        # Clear the blob signature cache to force blob change detection
+        _CACHE.pop("_blob_signature", None)
+        
+        # Force recalculation of dashboard summary (no cache usage)
+        print("Recalculating dashboard summary after deletion...")
         dashboard_data = calculate_dashboard_summary()
+        
+        # Immediately update MongoDB with fresh data
         try:
-            mongo_upsert_dashboard_summary(dashboard_data)
-        except Exception:
-            pass
-        save_dashboard_summary_to_blob(dashboard_data)
+            mongo_success = mongo_upsert_dashboard_summary(dashboard_data)
+            print(f"MongoDB dashboard update: {'success' if mongo_success else 'failed'}")
+        except Exception as e:
+            print(f"MongoDB update failed: {e}")
+        
+        # Update blob storage cache as backup
+        try:
+            save_dashboard_summary_to_blob(dashboard_data)
+            print("Blob storage dashboard cache updated")
+        except Exception as e:
+            print(f"Blob storage update failed: {e}")
+
+        print(f"Call '{call_id}' deletion completed. New totals: {dashboard_data.get('total_calls', 0)} calls, {dashboard_data.get('calls_with_analysis', 0)} with analysis")
 
         return {
             "status": "success",
-            "message": f"Call '{call_id}' deleted",
+            "message": f"Call '{call_id}' deleted successfully",
             "deleted": details,
             "dashboard": {
                 "total_calls": dashboard_data.get("total_calls", 0),
                 "calls_with_analysis": dashboard_data.get("calls_with_analysis", 0),
+                "updated_at": dashboard_data.get("updated_at"),
             },
         }
     except Exception as e:
+        print(f"Error deleting call '{call_id}': {e}")
         return {
             "status": "error",
             "message": str(e),
