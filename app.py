@@ -1278,12 +1278,27 @@ def delete_call(call_id: str) -> Dict[str, Any]:
         print("Recalculating dashboard summary after deletion...")
         dashboard_data = calculate_dashboard_summary()
         
-        # Immediately update MongoDB with fresh data
-        try:
-            mongo_success = mongo_upsert_dashboard_summary(dashboard_data)
-            print(f"MongoDB dashboard update: {'success' if mongo_success else 'failed'}")
-        except Exception as e:
-            print(f"MongoDB update failed: {e}")
+        # Ensure MongoDB is updated before considering delete complete
+        mongo_success = False
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                mongo_success = mongo_upsert_dashboard_summary(dashboard_data)
+                if mongo_success:
+                    print(f"MongoDB dashboard update successful on attempt {attempt + 1}")
+                    break
+                else:
+                    print(f"MongoDB dashboard update failed on attempt {attempt + 1}")
+            except Exception as e:
+                print(f"MongoDB update error on attempt {attempt + 1}: {e}")
+            
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(0.5)  # Brief pause before retry
+        
+        if not mongo_success:
+            print("WARNING: MongoDB dashboard update failed after all retries")
+            # Still continue but log the issue
         
         # Update blob storage cache as backup
         try:
@@ -1291,6 +1306,20 @@ def delete_call(call_id: str) -> Dict[str, Any]:
             print("Blob storage dashboard cache updated")
         except Exception as e:
             print(f"Blob storage update failed: {e}")
+
+        # Verify MongoDB has the updated data
+        try:
+            verification = mongo_get_dashboard_summary()
+            if verification:
+                verified_count = verification.get('total_calls', -1)
+                expected_count = dashboard_data.get('total_calls', -1)
+                print(f"MongoDB verification: expected {expected_count} calls, found {verified_count} calls")
+                if verified_count != expected_count:
+                    print("WARNING: MongoDB verification failed - counts don't match")
+            else:
+                print("WARNING: Could not verify MongoDB data after update")
+        except Exception as e:
+            print(f"MongoDB verification error: {e}")
 
         print(f"Call '{call_id}' deletion completed. New totals: {dashboard_data.get('total_calls', 0)} calls, {dashboard_data.get('calls_with_analysis', 0)} with analysis")
 
@@ -1315,34 +1344,57 @@ def delete_call(call_id: str) -> Dict[str, Any]:
 @app.route('/dashboard/summary', methods=['GET'])
 def dashboard_summary() -> Dict[str, Any]:
     """Return dashboard summary strictly from MongoDB.
-    If absent, compute once, upsert to Mongo, and return that.
+    Always returns fresh data - no caching to ensure immediate updates after deletions.
     """
-    # Always prefer Mongo for zero-delay reads
-    mongo_doc = mongo_get_dashboard_summary()
-    if mongo_doc is not None:
-        response = jsonify(mongo_doc)
-        # Add caching headers for better performance
-        response.headers['Cache-Control'] = 'public, max-age=60'  # Cache for 1 minute
-        response.headers['ETag'] = f'"{mongo_doc.get("updated_at", "unknown")}"'
-        return response
+    try:
+        print("Dashboard summary requested - checking MongoDB for latest data...")
+        
+        # Always get fresh data from MongoDB
+        mongo_doc = mongo_get_dashboard_summary()
+        
+        if mongo_doc is not None:
+            print(f"Found dashboard data in MongoDB: {mongo_doc.get('total_calls', 0)} calls, updated at {mongo_doc.get('updated_at', 'unknown')}")
+            response = jsonify(mongo_doc)
+            # Force no caching to ensure immediate updates after deletions
+            response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
+            return response
 
-    # Not found in Mongo: compute and persist, then return
-    print("Mongo empty: calculating dashboard summary and upserting")
-    result = calculate_dashboard_summary()
-    try:
-        mongo_upsert_dashboard_summary(result)
-    except Exception:
-        pass
-    # Best-effort persist to blob as secondary store
-    try:
-        save_dashboard_summary_to_blob(result)
-    except Exception:
-        pass
-    
-    response = jsonify(result)
-    response.headers['Cache-Control'] = 'public, max-age=60'
-    response.headers['ETag'] = f'"{result.get("updated_at", "unknown")}"'
-    return response
+        # Not found in Mongo: compute fresh data and persist
+        print("No dashboard data in MongoDB - computing fresh summary...")
+        result = calculate_dashboard_summary()
+        
+        # Ensure MongoDB is updated before returning
+        try:
+            mongo_success = mongo_upsert_dashboard_summary(result)
+            if mongo_success:
+                print(f"Successfully stored fresh dashboard data in MongoDB: {result.get('total_calls', 0)} calls")
+            else:
+                print("Failed to store dashboard data in MongoDB")
+        except Exception as e:
+            print(f"Error storing dashboard data in MongoDB: {e}")
+        
+        # Best-effort persist to blob as secondary store
+        try:
+            save_dashboard_summary_to_blob(result)
+        except Exception as e:
+            print(f"Error saving dashboard to blob: {e}")
+        
+        response = jsonify(result)
+        # Force no caching
+        response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+        return response
+        
+    except Exception as e:
+        print(f"Error in dashboard_summary endpoint: {e}")
+        return jsonify({
+            "error": str(e),
+            "total_calls": 0,
+            "calls_with_analysis": 0
+        }), 500
 
 @app.route('/insights', methods=['GET'])
 def get_insights() -> Dict[str, Any]:
