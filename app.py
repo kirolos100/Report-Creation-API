@@ -108,8 +108,7 @@ SYSTEM_PROMPT_DEFAULT = (
 
 ```json
 {
-  "customer_name": "<customer full name in English string or null if not present>",
-  "Agent_name":"<Agent full name in English string or null if not present>",
+  "name": "<customer full name in English string or null if not present>",
   "summary": "<one paragraph consisting of exactly four sentences>",
   "sentiment": {
     "score": <integer 1-5>,
@@ -133,9 +132,10 @@ SYSTEM_PROMPT_DEFAULT = (
   "agent_professionalism": "<one of: Highly Professional, Professional, Needs Improvement>",
   "Call Generated Insights": {
     "Customer Sentiment": "<Positive|Neutral|Negative>",
-    "Call Categorization": "<Inquiry|Product/Service|Issue|Other>",
+    "Call Categorization": "<Inquiry|Product/Service|Complaint|Other>",
     "Resolution Status": "<resolved|escalated|pending|other>",
     "Main Subject": "<short subject>",
+    "Main Topic": "<Installation and Setup Issues|Repair and Maintenance Concerns|Warranty and Replacement Queries|Product Availability and Purchase Inquiries|Customer Service and Communication Issues>",
     "Services": "<service(s) involved>",
     "Call Outcome": "<short outcome in one sentence>",
     "Agent Attitude": "<1–3 concise adjectives (dynamic per call) describing the agent's demeanor, e.g. Empathetic; Efficient and Professional; Rushed and Curt>",
@@ -496,6 +496,7 @@ def calculate_dashboard_summary() -> Dict[str, Any]:
     categories: Dict[str, int] = {}
     resolution_status: Dict[str, int] = {}
     subjects: Dict[str, int] = {}
+    topics: Dict[str, int] = {}
     services: Dict[str, int] = {}
     agent_professionalism: Dict[str, int] = {}
     resolved_count = 0
@@ -542,6 +543,9 @@ def calculate_dashboard_summary() -> Dict[str, Any]:
             resolution_status[rs] = resolution_status.get(rs, 0) + 1
         if structured.get("main_subject"):
             subjects[str(structured["main_subject"]).strip()] = subjects.get(str(structured["main_subject"]).strip(), 0) + 1
+        if structured.get("main_topic"):
+            topic = str(structured["main_topic"]).strip()
+            topics[topic] = topics.get(topic, 0) + 1
         if structured.get("services"):
             # split on comma or semicolon into multiple services
             sv = structured["services"]
@@ -596,6 +600,7 @@ def calculate_dashboard_summary() -> Dict[str, Any]:
         "categories": categories,
         "resolution_status": resolution_status,
         "subjects": subjects,
+        "topics": topics,
         "services": services,
         "agent_professionalism": agent_professionalism,
         "resolved_rate": (resolved_count / total) if total else None,
@@ -811,6 +816,7 @@ def _extract_structured_fields(analysis: Any) -> Dict[str, Any]:
         "call_categorization": None,
         "resolution_status": None,
         "main_subject": None,
+        "main_topic": None,
         "services": None,
         "call_outcome": None,
         "agent_attitude": None,
@@ -834,6 +840,7 @@ def _extract_structured_fields(analysis: Any) -> Dict[str, Any]:
         out["call_categorization"] = _get_ci(insights, ["Call Categorization", "Call Category", "category"])  # Inquiry/Issue/etc
         out["resolution_status"] = _get_ci(insights, ["Resolution Status"])  # resolved/escalated/pending
         out["main_subject"] = _get_ci(insights, ["Main Subject", "subject"])  # text
+        out["main_topic"] = _get_ci(insights, ["Main Topic", "main_topic"])  # Installation and Setup Issues|Repair and Maintenance Concerns|etc
         out["services"] = _get_ci(insights, ["Services"])  # text/list
         out["call_outcome"] = _get_ci(insights, ["Call Outcome"])  # text
         out["agent_attitude"] = _get_ci(insights, ["Agent Attitude"])  # text
