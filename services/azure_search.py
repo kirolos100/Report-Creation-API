@@ -362,6 +362,9 @@ def load_json_into_azure_search(index_name, json_docs):
     for i, doc in enumerate(json_docs):
         flattened = flatten_json(doc)
         flattened = harmonize_flattened(flattened)
+        
+        # Debug: log the flattened fields to identify problematic ones
+        print(f"Debug: Flattened fields for document {i}: {list(flattened.keys())}")
         # Prefer a stable unique ID from the document if available
         # Try common keys or fall back to a hashed content-based id
         try:
@@ -419,11 +422,18 @@ def load_json_into_azure_search(index_name, json_docs):
                 final_doc["Call_Generated_Insights_summary"] = final_doc["Call_Generated_Insights_Call_Summary"]
             del final_doc["Call_Generated_Insights_Call_Summary"]
         
-        # Temporary fix: remove 'name' field until index is recreated with proper schema
-        # This prevents indexing errors when the system prompt includes the new 'name' field
-        if "name" in final_doc:
-            print(f"Removing 'name' field from document {doc_id} to prevent schema error")
-            del final_doc["name"]
+        # Temporary fix: remove problematic fields that cause schema errors
+        # This prevents indexing errors when the system prompt includes new fields not in the index
+        problematic_fields = []
+        for field_key in list(final_doc.keys()):
+            # Check for various forms of the 'name' field that might cause issues
+            if (field_key.lower() in ['name', 'customer_name', 'customername'] or 
+                'name' in field_key.lower() and 'filename' not in field_key.lower() and 'audio_name' not in field_key.lower()):
+                problematic_fields.append(field_key)
+        
+        for field_key in problematic_fields:
+            print(f"Removing problematic field '{field_key}' from document {doc_id} to prevent schema error")
+            del final_doc[field_key]
 
         actions.append(final_doc)
 
@@ -433,6 +443,35 @@ def load_json_into_azure_search(index_name, json_docs):
         print(f"Upserted {len(actions)} documents into index '{index_name}'.")
         return "All document indexed", True
     except Exception as e:
+        error_msg = str(e)
+        print(f"Index upload failed: {error_msg}")
+        
+        # Check if this is a schema mismatch error
+        if "does not exist on type 'search.documentFields'" in error_msg or "not present in the API version" in error_msg:
+            print("Schema mismatch detected. This likely means the index needs to be recreated with the new fields.")
+            print("Consider using the /reindex-all-calls endpoint to recreate the index with updated schema.")
+            
+            # Try to extract the problematic field name from the error
+            import re
+            field_match = re.search(r"property '([^']+)' does not exist", error_msg)
+            if field_match:
+                problematic_field = field_match.group(1)
+                print(f"Problematic field identified: '{problematic_field}'")
+                
+                # Try to remove this field and retry once
+                print(f"Attempting to remove '{problematic_field}' and retry...")
+                for action in actions:
+                    if problematic_field in action:
+                        del action[problematic_field]
+                        print(f"Removed '{problematic_field}' from document {action.get('id', 'unknown')}")
+                
+                try:
+                    results = search_client.upload_documents(documents=actions)
+                    print(f"Retry successful! Upserted {len(actions)} documents after removing '{problematic_field}'.")
+                    return f"Documents indexed after removing problematic field '{problematic_field}'", True
+                except Exception as retry_error:
+                    print(f"Retry also failed: {retry_error}")
+        
         return f"Failed to index documents: {e}", False
 
 def search_query(index_name, query):
@@ -524,3 +563,27 @@ def delete_document_from_index(index_name: str, document_id: str) -> tuple[bool,
         error_msg = f"Error deleting document '{document_id}' from index '{index_name}': {e}"
         print(error_msg)
         return False, error_msg
+
+
+def document_exists_in_index(index_name: str, document_id: str) -> bool:
+    """
+    Check if a specific document exists in the Azure Search index.
+    
+    Args:
+        index_name: Name of the search index
+        document_id: ID of the document to check
+        
+    Returns:
+        True if document exists, False otherwise
+    """
+    try:
+        search_client = get_search_client(index_name)
+        
+        # Try to retrieve the specific document
+        result = search_client.get_document(key=document_id)
+        return result is not None
+        
+    except Exception as e:
+        # If document doesn't exist or any other error, return False
+        print(f"Document existence check failed for '{document_id}' in index '{index_name}': {e}")
+        return False
