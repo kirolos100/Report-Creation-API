@@ -1,4 +1,3 @@
-
 from services import azure_oai
 import json
 from azure.identity import DefaultAzureCredential
@@ -419,6 +418,12 @@ def load_json_into_azure_search(index_name, json_docs):
             if "Call_Generated_Insights_summary" not in final_doc:
                 final_doc["Call_Generated_Insights_summary"] = final_doc["Call_Generated_Insights_Call_Summary"]
             del final_doc["Call_Generated_Insights_Call_Summary"]
+        
+        # Temporary fix: remove 'name' field until index is recreated with proper schema
+        # This prevents indexing errors when the system prompt includes the new 'name' field
+        if "name" in final_doc:
+            print(f"Removing 'name' field from document {doc_id} to prevent schema error")
+            del final_doc["name"]
 
         actions.append(final_doc)
 
