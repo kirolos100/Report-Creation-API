@@ -975,45 +975,98 @@ def upload_complete_pipeline() -> Dict[str, Any]:
             # Step 4: Update Azure AI Search index for chat functionality
             print(f"Processing {filename}: Step 4 - Indexing for search...")
             try:
+                # Ensure index exists and is properly configured
+                index_name = "marketing_sentiment_details"
+                
+                # Check if index exists, create if needed
+                if not azure_search.index_exists(index_name):
+                    print(f"Index '{index_name}' doesn't exist. Creating with sample document...")
+                    create_message, create_success = azure_search.create_or_update_index(index_name, analysis_json)
+                    if not create_success:
+                        print(f"Failed to create index: {create_message}")
+                        search_indexed = False
+                        # Skip to the next step since index creation failed
+                        raise Exception(f"Index creation failed: {create_message}")
+                    print(f"Index created successfully: {create_message}")
+                
                 # Get current document count before indexing
-                current_count = azure_search.get_index_document_count("marketing_sentiment_details")
+                current_count = azure_search.get_index_document_count(index_name)
                 print(f"Current index document count: {current_count}")
                 
-                # Load the analysis JSON into the marketing_sentiment_details index
-                # Ensure a stable document id based on the call id (filename without extension)
+                # Prepare the analysis JSON for indexing
                 analysis_payload = dict(analysis_json) if isinstance(analysis_json, dict) else {"raw": analysis_json}
                 analysis_payload.setdefault("call_id", name_no_ext)
                 analysis_payload.setdefault("id", name_no_ext)
-                message, success = azure_search.load_json_into_azure_search(
-                    "marketing_sentiment_details", 
-                    [analysis_payload]
-                )
+                
+                # Load the analysis JSON into the index
+                message, success = azure_search.load_json_into_azure_search(index_name, [analysis_payload])
+                
                 if not success:
                     print(f"Warning: Failed to index {name_no_ext} for search: {message}")
                     search_indexed = False
                 else:
-                    search_indexed = True
-                    # Get new document count after indexing
-                    new_count = azure_search.get_index_document_count("marketing_sentiment_details")
-                    print(f"Indexing completed. New document count: {new_count}")
-                    if new_count > current_count:
-                        print(f"Successfully added {new_count - current_count} new document(s) to search index")
-                    else:
-                        print(f"Document count unchanged. Document may have been updated rather than added.")
+                    print(f"Document upload to index reported success: {message}")
                     
-                    print(f"Processing {filename}: Step 4 - Search indexing completed successfully")
+                    # Verify the document was actually indexed with retry logic
+                    import time
+                    max_retries = 5
+                    retry_delay = 2  # seconds
+                    search_indexed = False
+                    
+                    for retry in range(max_retries):
+                        time.sleep(retry_delay)  # Wait for indexing to complete
+                        new_count = azure_search.get_index_document_count(index_name)
+                        print(f"Retry {retry + 1}: Document count check - Current: {new_count}, Previous: {current_count}")
+                        
+                        if new_count > current_count:
+                            print(f"✅ Successfully added {new_count - current_count} new document(s) to search index")
+                            search_indexed = True
+                            break
+                        elif new_count == current_count and current_count > 0:
+                            # Document might have been updated rather than added
+                            # Verify the specific document exists
+                            try:
+                                doc_exists = azure_search.document_exists_in_index(index_name, name_no_ext)
+                                if doc_exists:
+                                    print(f"✅ Document {name_no_ext} exists in index (updated rather than added)")
+                                    search_indexed = True
+                                    break
+                                else:
+                                    print(f"❌ Document {name_no_ext} not found in index despite successful upload")
+                            except Exception as verify_error:
+                                print(f"Warning: Could not verify document existence: {verify_error}")
+                        
+                        if retry < max_retries - 1:
+                            print(f"Document not yet indexed, retrying in {retry_delay} seconds...")
+                        else:
+                            print(f"❌ Document indexing verification failed after {max_retries} retries")
+                            print(f"Final count: {new_count}, Expected: >{current_count}")
+                    
+                    if search_indexed:
+                        print(f"Processing {filename}: Step 4 - Search indexing completed and verified successfully")
+                    else:
+                        print(f"Processing {filename}: Step 4 - Search indexing completed but verification failed")
+                        
             except Exception as e:
-                print(f"Warning: Search indexing failed for {name_no_ext}: {e}")
+                print(f"Error: Search indexing failed for {name_no_ext}: {e}")
+                import traceback
+                traceback.print_exc()
                 search_indexed = False
+            
+            # Final index verification
+            final_index_count = azure_search.get_index_document_count("marketing_sentiment_details") if search_indexed else 0
             
             results.append({
                 "file": filename,
                 "transcription_blob": f"{azure_storage.TRANSCRIPTION_FOLDER}/{name_no_ext}.txt",
                 "analysis_blob": f"{azure_storage.LLM_ANALYSIS_FOLDER}/persona/{name_no_ext}.json",
                 "search_indexed": search_indexed,
+                "index_document_count": final_index_count,
+                "call_id": name_no_ext,
             })
             
-            print(f"Processing {filename}: All steps completed successfully")
+            status_msg = "successfully" if search_indexed else "with indexing issues"
+            print(f"Processing {filename}: All steps completed {status_msg} (Index count: {final_index_count})")
             
         except Exception as e:
             # Log error but continue with other files
@@ -1047,7 +1100,31 @@ def upload_complete_pipeline() -> Dict[str, Any]:
     except Exception as e:
         print(f"Error updating dashboard summary: {e}")
     
-    return {"status": "ok", "processed": results}
+    # Final index status summary
+    try:
+        final_index_count = azure_search.get_index_document_count("marketing_sentiment_details")
+        successfully_indexed = sum(1 for r in results if r.get("search_indexed", False))
+        total_processed = len(results)
+        
+        print(f"\n=== UPLOAD SUMMARY ===")
+        print(f"Files processed: {total_processed}")
+        print(f"Successfully indexed: {successfully_indexed}")
+        print(f"Final index document count: {final_index_count}")
+        print(f"Index status: {'✅ Healthy' if final_index_count > 0 else '❌ Empty or Issues'}")
+        
+        return {
+            "status": "ok", 
+            "processed": results,
+            "summary": {
+                "total_processed": total_processed,
+                "successfully_indexed": successfully_indexed,
+                "final_index_count": final_index_count,
+                "index_healthy": final_index_count > 0
+            }
+        }
+    except Exception as e:
+        print(f"Error generating upload summary: {e}")
+        return {"status": "ok", "processed": results}
 
 
 @app.route('/upload', methods=['POST', 'OPTIONS'])
