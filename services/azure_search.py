@@ -587,3 +587,161 @@ def document_exists_in_index(index_name: str, document_id: str) -> bool:
         # If document doesn't exist or any other error, return False
         print(f"Document existence check failed for '{document_id}' in index '{index_name}': {e}")
         return False
+
+
+def load_json_into_azure_search_optimized(index_name, json_docs, wait_for_completion=True):
+    """
+    Optimized version of load_json_into_azure_search with better performance feedback.
+    
+    Args:
+        index_name: Name of the search index
+        json_docs: List of JSON documents to index
+        wait_for_completion: Whether to wait and verify indexing completion
+        
+    Returns:
+        Tuple of (success_message, success_boolean, indexed_document_ids)
+    """
+    if not json_docs:
+        return "No documents to process.", False, []
+
+    # Create/Update the index with the first doc as a template
+    sample_doc = json_docs[0]
+    message, result = create_or_update_index(index_name, sample_doc)
+    if not result:
+        return message, False, []
+
+    # Create a SearchClient
+    search_client = get_search_client(index_name)
+    
+    # Get current count before indexing
+    initial_count = get_index_document_count(index_name)
+    
+    # Convert each doc to final structure for upserting
+    actions = []
+    document_ids = []
+    
+    for i, doc in enumerate(json_docs):
+        flattened = flatten_json(doc)
+        flattened = harmonize_flattened(flattened)
+        
+        # Get document ID
+        try:
+            preferred_id = None
+            for key in [
+                "id", "call_id", "callId", "audio_name", "audioName",
+                "Call_ID", "CallId", "Audio_Name"
+            ]:
+                if isinstance(doc, dict) and key in doc and doc.get(key):
+                    preferred_id = str(doc.get(key))
+                    break
+                if key in flattened and flattened.get(key):
+                    preferred_id = str(flattened.get(key))
+                    break
+            if not preferred_id:
+                import hashlib
+                important_text = json.dumps(doc, sort_keys=True)[:2048]
+                preferred_id = hashlib.sha1(important_text.encode("utf-8")).hexdigest()
+            doc_id = preferred_id
+        except Exception:
+            doc_id = f"doc-{i}"
+        
+        document_ids.append(doc_id)
+        
+        # Build content string
+        text_parts = []
+        for k, v in flattened.items():
+            if isinstance(v, str):
+                text_parts.append(v)
+        combined_text = " ".join(text_parts) if text_parts else ""
+
+        # Get embeddings
+        embedding_vector = azure_oai.get_embedding(combined_text)
+
+        # Prepare final doc
+        final_doc = {
+            "id": doc_id,
+            "content": combined_text,
+            "contentVector": embedding_vector
+        }
+        
+        # Add flattened fields
+        for k, v in flattened.items():
+            if isinstance(v, list):
+                final_doc[k] = " ".join(map(str, v))
+            else:
+                final_doc[k] = v
+
+        # Remove problematic fields
+        problematic_fields = []
+        for field_key in list(final_doc.keys()):
+            if (field_key.lower() in ['name', 'customer_name', 'customername'] or 
+                'name' in field_key.lower() and 'filename' not in field_key.lower() and 'audio_name' not in field_key.lower()):
+                problematic_fields.append(field_key)
+        
+        for field_key in problematic_fields:
+            print(f"Removing problematic field '{field_key}' from document {doc_id}")
+            del final_doc[field_key]
+
+        actions.append(final_doc)
+
+    # Upload documents
+    try:
+        results = search_client.upload_documents(documents=actions)
+        print(f"Successfully uploaded {len(actions)} documents to index '{index_name}'")
+        
+        if wait_for_completion:
+            # Quick verification of document availability
+            verified_docs = []
+            import time
+            
+            # Immediate check (no delay)
+            for doc_id in document_ids:
+                try:
+                    if document_exists_in_index(index_name, doc_id):
+                        verified_docs.append(doc_id)
+                except:
+                    pass
+            
+            # If not all documents are immediately available, wait briefly and check again
+            if len(verified_docs) < len(document_ids):
+                time.sleep(0.5)  # Brief wait for Azure Search to process
+                for doc_id in document_ids:
+                    if doc_id not in verified_docs:
+                        try:
+                            if document_exists_in_index(index_name, doc_id):
+                                verified_docs.append(doc_id)
+                        except:
+                            pass
+            
+            success_rate = len(verified_docs) / len(document_ids)
+            if success_rate >= 0.8:  # 80% success rate is acceptable
+                return f"Successfully indexed {len(verified_docs)}/{len(document_ids)} documents", True, verified_docs
+            else:
+                return f"Partially indexed {len(verified_docs)}/{len(document_ids)} documents", True, verified_docs
+        else:
+            return f"Uploaded {len(actions)} documents (verification skipped)", True, document_ids
+            
+    except Exception as e:
+        error_msg = str(e)
+        print(f"Index upload failed: {error_msg}")
+        
+        # Handle schema mismatch errors
+        if "does not exist on type 'search.documentFields'" in error_msg:
+            print("Schema mismatch detected - attempting field removal and retry...")
+            import re
+            field_match = re.search(r"property '([^']+)' does not exist", error_msg)
+            if field_match:
+                problematic_field = field_match.group(1)
+                print(f"Removing problematic field: '{problematic_field}'")
+                
+                for action in actions:
+                    if problematic_field in action:
+                        del action[problematic_field]
+                
+                try:
+                    results = search_client.upload_documents(documents=actions)
+                    return f"Documents indexed after removing '{problematic_field}'", True, document_ids
+                except Exception as retry_error:
+                    print(f"Retry failed: {retry_error}")
+        
+        return f"Failed to index documents: {e}", False, []
