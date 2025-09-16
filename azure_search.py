@@ -1,3 +1,4 @@
+
 from services import azure_oai
 import json
 from azure.identity import DefaultAzureCredential
@@ -437,26 +438,11 @@ def load_json_into_azure_search(index_name, json_docs):
 
         actions.append(final_doc)
 
-    # 6d) Upsert in bulk using merge-or-upload to preserve existing documents
+    # 6d) Upsert in bulk
     try:
-        # Use merge_or_upload to ensure documents are added/updated, not replaced
-        from azure.search.documents import IndexDocumentsAction
-        
-        # Create actions with explicit merge-or-upload operation
-        index_actions = []
-        for doc in actions:
-            index_actions.append({
-                "@search.action": "mergeOrUpload",  # This ensures documents are merged/added, not replaced
-                **doc
-            })
-        
-        results = search_client.index_documents(index_actions)
-        print(f"Successfully indexed {len(index_actions)} documents into index '{index_name}' using merge-or-upload.")
-        
-        # Force index refresh for immediate availability
-        force_index_refresh(index_name)
-        
-        return "All documents indexed with immediate refresh", True
+        results = search_client.upload_documents(documents=actions)
+        print(f"Upserted {len(actions)} documents into index '{index_name}'.")
+        return "All document indexed", True
     except Exception as e:
         error_msg = str(e)
         print(f"Index upload failed: {error_msg}")
@@ -481,16 +467,8 @@ def load_json_into_azure_search(index_name, json_docs):
                         print(f"Removed '{problematic_field}' from document {action.get('id', 'unknown')}")
                 
                 try:
-                    # Use merge-or-upload for retry as well
-                    retry_actions = []
-                    for doc in actions:
-                        retry_actions.append({
-                            "@search.action": "mergeOrUpload",
-                            **doc
-                        })
-                    results = search_client.index_documents(retry_actions)
-                    print(f"Retry successful! Indexed {len(retry_actions)} documents after removing '{problematic_field}'.")
-                    force_index_refresh(index_name)
+                    results = search_client.upload_documents(documents=actions)
+                    print(f"Retry successful! Upserted {len(actions)} documents after removing '{problematic_field}'.")
                     return f"Documents indexed after removing problematic field '{problematic_field}'", True
                 except Exception as retry_error:
                     print(f"Retry also failed: {retry_error}")
@@ -707,36 +685,40 @@ def load_json_into_azure_search_optimized(index_name, json_docs, wait_for_comple
 
         actions.append(final_doc)
 
-    # Upload documents using merge-or-upload to ensure documents are added/updated, not replaced
+    # Upload documents
     try:
-        # Use merge_or_upload_documents instead of upload_documents to preserve existing documents
-        from azure.search.documents import IndexDocumentsAction
-        
-        # Create actions with explicit merge-or-upload operation
-        index_actions = []
-        for doc in actions:
-            index_actions.append({
-                "@search.action": "mergeOrUpload",  # This ensures documents are merged/added, not replaced
-                **doc
-            })
-        
-        results = search_client.index_documents(index_actions)
-        print(f"Successfully indexed {len(index_actions)} documents to index '{index_name}' using merge-or-upload")
+        results = search_client.upload_documents(documents=actions)
+        print(f"Successfully uploaded {len(actions)} documents to index '{index_name}'")
         
         if wait_for_completion:
-            # Force index refresh to make documents available immediately
-            print("Triggering index refresh for immediate document availability...")
-            force_index_refresh(index_name)
+            # Quick verification of document availability
+            verified_docs = []
+            import time
             
-            # Use optimized document availability waiting
-            verified_docs = wait_for_document_availability(index_name, document_ids, max_wait_seconds=5)
+            # Immediate check (no delay)
+            for doc_id in document_ids:
+                try:
+                    if document_exists_in_index(index_name, doc_id):
+                        verified_docs.append(doc_id)
+                except:
+                    pass
             
-            success_rate = len(verified_docs) / len(document_ids) if document_ids else 1.0
+            # If not all documents are immediately available, wait briefly and check again
+            if len(verified_docs) < len(document_ids):
+                time.sleep(0.5)  # Brief wait for Azure Search to process
+                for doc_id in document_ids:
+                    if doc_id not in verified_docs:
+                        try:
+                            if document_exists_in_index(index_name, doc_id):
+                                verified_docs.append(doc_id)
+                        except:
+                            pass
             
+            success_rate = len(verified_docs) / len(document_ids)
             if success_rate >= 0.8:  # 80% success rate is acceptable
-                return f"Successfully indexed and verified {len(verified_docs)}/{len(document_ids)} documents", True, verified_docs
+                return f"Successfully indexed {len(verified_docs)}/{len(document_ids)} documents", True, verified_docs
             else:
-                return f"Indexed {len(document_ids)} documents, verified {len(verified_docs)} immediately available", True, verified_docs
+                return f"Partially indexed {len(verified_docs)}/{len(document_ids)} documents", True, verified_docs
         else:
             return f"Uploaded {len(actions)} documents (verification skipped)", True, document_ids
             
@@ -758,106 +740,9 @@ def load_json_into_azure_search_optimized(index_name, json_docs, wait_for_comple
                         del action[problematic_field]
                 
                 try:
-                    # Use merge-or-upload for retry as well
-                    retry_actions = []
-                    for doc in actions:
-                        retry_actions.append({
-                            "@search.action": "mergeOrUpload",
-                            **doc
-                        })
-                    results = search_client.index_documents(retry_actions)
-                    force_index_refresh(index_name)
+                    results = search_client.upload_documents(documents=actions)
                     return f"Documents indexed after removing '{problematic_field}'", True, document_ids
                 except Exception as retry_error:
                     print(f"Retry failed: {retry_error}")
         
         return f"Failed to index documents: {e}", False, []
-
-
-def force_index_refresh(index_name: str) -> bool:
-    """
-    Force Azure Search index to refresh and make documents immediately available.
-    This is a workaround for Azure Search's eventual consistency model.
-    
-    Args:
-        index_name: Name of the search index to refresh
-        
-    Returns:
-        True if refresh was attempted, False otherwise
-    """
-    try:
-        # Azure Search doesn't have a direct "refresh" API, but we can trigger it
-        # by performing a simple search operation which forces index refresh
-        search_client = get_search_client(index_name)
-        
-        # Perform a minimal search to trigger index refresh
-        search_client.search(search_text="*", top=1, include_total_count=True)
-        
-        print(f"Index refresh triggered for '{index_name}'")
-        return True
-        
-    except Exception as e:
-        print(f"Failed to trigger index refresh for '{index_name}': {e}")
-        return False
-
-
-def wait_for_document_availability(index_name: str, document_ids: list, max_wait_seconds: int = 10) -> list:
-    """
-    Wait for documents to become available in the search index with optimized polling.
-    
-    Args:
-        index_name: Name of the search index
-        document_ids: List of document IDs to wait for
-        max_wait_seconds: Maximum time to wait in seconds
-        
-    Returns:
-        List of document IDs that are confirmed available
-    """
-    import time
-    
-    available_docs = []
-    start_time = time.time()
-    
-    # Check intervals: 0s, 0.1s, 0.3s, 0.6s, 1s, 2s, 3s, remaining time
-    check_intervals = [0, 0.1, 0.3, 0.6, 1.0, 2.0, 3.0]
-    
-    for interval in check_intervals:
-        if time.time() - start_time >= max_wait_seconds:
-            break
-            
-        if interval > 0:
-            time.sleep(interval)
-        
-        # Check which documents are now available
-        newly_available = []
-        for doc_id in document_ids:
-            if doc_id not in available_docs:
-                try:
-                    if document_exists_in_index(index_name, doc_id):
-                        available_docs.append(doc_id)
-                        newly_available.append(doc_id)
-                except:
-                    pass
-        
-        if newly_available:
-            print(f"Documents became available: {newly_available}")
-        
-        # If all documents are available, return early
-        if len(available_docs) >= len(document_ids):
-            break
-    
-    # Final check with any remaining time
-    remaining_time = max_wait_seconds - (time.time() - start_time)
-    if remaining_time > 0 and len(available_docs) < len(document_ids):
-        time.sleep(min(remaining_time, 1.0))
-        
-        for doc_id in document_ids:
-            if doc_id not in available_docs:
-                try:
-                    if document_exists_in_index(index_name, doc_id):
-                        available_docs.append(doc_id)
-                except:
-                    pass
-    
-    print(f"Document availability check completed: {len(available_docs)}/{len(document_ids)} available")
-    return available_docs
