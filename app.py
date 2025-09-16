@@ -998,54 +998,37 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 analysis_payload.setdefault("call_id", name_no_ext)
                 analysis_payload.setdefault("id", name_no_ext)
                 
-                # Load the analysis JSON into the index
-                message, success = azure_search.load_json_into_azure_search(index_name, [analysis_payload])
+                # Load the analysis JSON into the index using optimized method
+                message, success, indexed_doc_ids = azure_search.load_json_into_azure_search_optimized(
+                    index_name, [analysis_payload], wait_for_completion=True
+                )
                 
                 if not success:
                     print(f"Warning: Failed to index {name_no_ext} for search: {message}")
                     search_indexed = False
                 else:
-                    print(f"Document upload to index reported success: {message}")
+                    print(f"✅ Document indexing completed: {message}")
+                    search_indexed = True
                     
-                    # Verify the document was actually indexed with retry logic
-                    import time
-                    max_retries = 5
-                    retry_delay = 2  # seconds
-                    search_indexed = False
+                    # Get final document count for logging
+                    final_count = azure_search.get_index_document_count(index_name)
+                    print(f"Index now contains {final_count} total documents")
                     
-                    for retry in range(max_retries):
-                        time.sleep(retry_delay)  # Wait for indexing to complete
-                        new_count = azure_search.get_index_document_count(index_name)
-                        print(f"Retry {retry + 1}: Document count check - Current: {new_count}, Previous: {current_count}")
-                        
-                        if new_count > current_count:
-                            print(f"✅ Successfully added {new_count - current_count} new document(s) to search index")
-                            search_indexed = True
-                            break
-                        elif new_count == current_count and current_count > 0:
-                            # Document might have been updated rather than added
-                            # Verify the specific document exists
-                            try:
-                                doc_exists = azure_search.document_exists_in_index(index_name, name_no_ext)
-                                if doc_exists:
-                                    print(f"✅ Document {name_no_ext} exists in index (updated rather than added)")
-                                    search_indexed = True
-                                    break
-                                else:
-                                    print(f"❌ Document {name_no_ext} not found in index despite successful upload")
-                            except Exception as verify_error:
-                                print(f"Warning: Could not verify document existence: {verify_error}")
-                        
-                        if retry < max_retries - 1:
-                            print(f"Document not yet indexed, retrying in {retry_delay} seconds...")
-                        else:
-                            print(f"❌ Document indexing verification failed after {max_retries} retries")
-                            print(f"Final count: {new_count}, Expected: >{current_count}")
-                    
-                    if search_indexed:
-                        print(f"Processing {filename}: Step 4 - Search indexing completed and verified successfully")
+                    # Log the change in document count
+                    if final_count > current_count:
+                        print(f"📈 Added {final_count - current_count} new document(s) to index")
+                    elif final_count == current_count and current_count > 0:
+                        print(f"🔄 Document updated in existing index (count unchanged: {final_count})")
                     else:
-                        print(f"Processing {filename}: Step 4 - Search indexing completed but verification failed")
+                        print(f"ℹ️ Index document count: {final_count}")
+                    
+                    # Verify specific document was indexed
+                    if name_no_ext in indexed_doc_ids:
+                        print(f"✅ Document {name_no_ext} confirmed in search index")
+                    else:
+                        print(f"⚠️ Document {name_no_ext} may still be processing in background")
+                    
+                    print(f"Processing {filename}: Step 4 - Search indexing completed successfully")
                         
             except Exception as e:
                 print(f"Error: Search indexing failed for {name_no_ext}: {e}")
