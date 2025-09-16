@@ -998,8 +998,7 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 analysis_payload.setdefault("call_id", name_no_ext)
                 analysis_payload.setdefault("id", name_no_ext)
                 
-                # Load the analysis JSON into the index using optimized method with immediate refresh
-                print(f"Indexing document {name_no_ext} with immediate availability...")
+                # Load the analysis JSON into the index using optimized method
                 message, success, indexed_doc_ids = azure_search.load_json_into_azure_search_optimized(
                     index_name, [analysis_payload], wait_for_completion=True
                 )
@@ -1011,25 +1010,22 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                     print(f"✅ Document indexing completed: {message}")
                     search_indexed = True
                     
-                    # Force an immediate document count refresh and get final count
-                    azure_search.force_index_refresh(index_name)  # Additional refresh to ensure count is updated
-                    import time
-                    time.sleep(0.1)  # Brief pause to allow count update
+                    # Get final document count for logging
                     final_count = azure_search.get_index_document_count(index_name)
-                    print(f"Index now contains {final_count} total documents (immediately updated)")
+                    print(f"Index now contains {final_count} total documents")
                     
                     # Log the change in document count
                     if final_count > current_count:
                         print(f"📈 Added {final_count - current_count} new document(s) to index")
                     elif final_count == current_count and current_count > 0:
                         print(f"🔄 Document updated in existing index (count unchanged: {final_count})")
-                    else:
+                                else:
                         print(f"ℹ️ Index document count: {final_count}")
-                    
+                        
                     # Verify specific document was indexed
                     if name_no_ext in indexed_doc_ids:
                         print(f"✅ Document {name_no_ext} confirmed in search index")
-                    else:
+                        else:
                         print(f"⚠️ Document {name_no_ext} may still be processing in background")
                     
                     print(f"Processing {filename}: Step 4 - Search indexing completed successfully")
