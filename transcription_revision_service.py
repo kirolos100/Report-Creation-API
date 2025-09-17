@@ -43,7 +43,7 @@ class TranscriptionRevisionService:
 
 مهمتك هي إنشاء نسخة محسنة ومنقحة من النسخة الأصلية للمحادثة مع الحفاظ على:
 1. التسلسل الزمني الدقيق للمحادثة
-2. تسميات المتحدثين (العميل: / الموظف:)
+2. تسميات المتحدثين (Customer: / Agent:) باللغة الإنجليزية
 3. الطوابع الزمنية بنفس الصيغة [HH:MM:SS.mmm]
 4. المعنى والسياق الأصلي للمحادثة
 5. طبيعة الحوار بين العميل والموظف
@@ -62,19 +62,45 @@ class TranscriptionRevisionService:
 - لا تضيف معلومات جديدة لم تكن في النسخة الأصلية
 - احتفظ بنفس عدد الأسطر تقريباً
 - احتفظ بالطوابع الزمنية كما هي
-- احتفظ بتسميات المتحدثين (العميل: / الموظف:)
-- استخدم اللغة العربية المصرية الطبيعية والمهنية
+- استخدم تسميات المتحدثين Customer: للعميل و Agent: للموظف (باللغة الإنجليزية)
+- استخدم اللغة العربية المصرية الطبيعية والمهنية للمحتوى
+- لا تضيف أي جمل تمهيدية أو تعريفية
+- ابدأ مباشرة بالمحادثة المحسنة
 
 النسخة الأصلية للمحادثة:
 {original_transcription}
 
-قم بإنشاء النسخة المحسنة والمنقحة:"""
+ابدأ مباشرة بالمحادثة المحسنة دون أي مقدمة:"""
 
         try:
             revised_arabic = azure_oai.call_llm(arabic_revision_prompt, "")
             
             # Clean up the response
             revised_arabic = revised_arabic.strip()
+            
+            # Remove any introduction sentences or headers
+            lines = revised_arabic.split('\n')
+            cleaned_lines = []
+            started = False
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    if started:
+                        cleaned_lines.append('')
+                    continue
+                
+                # Check if this line looks like a conversation line (has timestamp and speaker)
+                if re.match(r'^\[\d{2}:\d{2}:\d{2}\.\d{3}\]\s+(Agent|Customer):', line):
+                    started = True
+                    cleaned_lines.append(line)
+                elif started:
+                    # If we've started, keep all lines (including continuation lines)
+                    cleaned_lines.append(line)
+                # Skip lines before the conversation starts
+            
+            if cleaned_lines:
+                revised_arabic = '\n'.join(cleaned_lines)
             
             # Ensure the format is maintained
             if not self._validate_transcription_format(revised_arabic):
@@ -138,17 +164,43 @@ Important guidelines:
 - Keep speaker labels (Customer: / Agent:)
 - Use clear, professional English appropriate for call center context
 - Maintain the conversational tone and customer service nature
+- Do not add any introductory sentences or headers
+- Start directly with the improved conversation
 
 Original conversation:
 {original_transcription}
 
-Create the revised, clean English version:"""
+Start directly with the improved conversation without any introduction:"""
 
         try:
             revised_english = azure_oai.call_llm(english_revision_prompt, "")
             
             # Clean up the response
             revised_english = revised_english.strip()
+            
+            # Remove any introduction sentences or headers
+            lines = revised_english.split('\n')
+            cleaned_lines = []
+            started = False
+            
+            for line in lines:
+                line = line.strip()
+                if not line:
+                    if started:
+                        cleaned_lines.append('')
+                    continue
+                
+                # Check if this line looks like a conversation line (has timestamp and speaker)
+                if re.match(r'^\[\d{2}:\d{2}:\d{2}\.\d{3}\]\s+(Agent|Customer):', line):
+                    started = True
+                    cleaned_lines.append(line)
+                elif started:
+                    # If we've started, keep all lines (including continuation lines)
+                    cleaned_lines.append(line)
+                # Skip lines before the conversation starts
+            
+            if cleaned_lines:
+                revised_english = '\n'.join(cleaned_lines)
             
             # Ensure the format is maintained
             if not self._validate_transcription_format(revised_english):
