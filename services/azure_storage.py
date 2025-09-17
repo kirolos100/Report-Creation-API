@@ -18,6 +18,8 @@ STORAGE_ACCOUNT_NAME = "nidallhxy634olzi4"
 DEFAULT_CONTAINER = "mainproject"
 AUDIO_FOLDER = "audios"
 TRANSCRIPTION_FOLDER = "transcriptions"
+REVISED_ARABIC_FOLDER = "revised_arabic_transcriptions"
+REVISED_ENGLISH_FOLDER = "revised_english_transcriptions"
 EVAL_FOLDER = "evaluations"
 PROMPT_FOLDER = "prompts"
 LLM_ANALYSIS_FOLDER = "llmanalysis"
@@ -244,8 +246,20 @@ def delete_audio(blob_name):
 def read_transcription(blob_name):
     return read_blob(blob_name, TRANSCRIPTION_FOLDER)
 
+def read_revised_arabic_transcription(blob_name):
+    return read_blob(blob_name, REVISED_ARABIC_FOLDER)
+
+def read_revised_english_transcription(blob_name):
+    return read_blob(blob_name, REVISED_ENGLISH_FOLDER)
+
 def delete_transcription(blob_name):
     return delete_blob(blob_name, TRANSCRIPTION_FOLDER)
+
+def delete_revised_arabic_transcription(blob_name):
+    return delete_blob(blob_name, REVISED_ARABIC_FOLDER)
+
+def delete_revised_english_transcription(blob_name):
+    return delete_blob(blob_name, REVISED_ENGLISH_FOLDER)
 
 def read_prompt(blob_name):
     return read_blob(blob_name, PROMPT_FOLDER)
@@ -372,6 +386,22 @@ def upload_transcription_to_blob(blob_name, transcribed_text):
     transcription_file_name = blob_name.split('/')[-1].replace(" ", "_") + ".txt"
     return upload_blob(transcribed_text, transcription_file_name, TRANSCRIPTION_FOLDER)
 
+def upload_revised_arabic_transcription_to_blob(blob_name, revised_text):
+    """
+    Upload a revised Arabic transcription as a .txt file in the REVISED_ARABIC_FOLDER.
+    """
+    # Clean up any spaces, etc.
+    transcription_file_name = blob_name.split('/')[-1].replace(" ", "_") + ".txt"
+    return upload_blob(revised_text, transcription_file_name, REVISED_ARABIC_FOLDER)
+
+def upload_revised_english_transcription_to_blob(blob_name, revised_text):
+    """
+    Upload a revised English transcription as a .txt file in the REVISED_ENGLISH_FOLDER.
+    """
+    # Clean up any spaces, etc.
+    transcription_file_name = blob_name.split('/')[-1].replace(" ", "_") + ".txt"
+    return upload_blob(revised_text, transcription_file_name, REVISED_ENGLISH_FOLDER)
+
 
 def transcription_already_exists(blob_name: str):
     """
@@ -379,6 +409,20 @@ def transcription_already_exists(blob_name: str):
     """
     transcription_file_name = blob_name + ".txt"
     return transcription_file_name in list_blobs(TRANSCRIPTION_FOLDER)
+
+def revised_arabic_transcription_already_exists(blob_name: str):
+    """
+    Check if a revised Arabic transcription for `blob_name` (as .txt) already exists.
+    """
+    transcription_file_name = blob_name + ".txt"
+    return transcription_file_name in list_blobs(REVISED_ARABIC_FOLDER)
+
+def revised_english_transcription_already_exists(blob_name: str):
+    """
+    Check if a revised English transcription for `blob_name` (as .txt) already exists.
+    """
+    transcription_file_name = blob_name + ".txt"
+    return transcription_file_name in list_blobs(REVISED_ENGLISH_FOLDER)
 
 
 def get_calls_to_transcribe():
