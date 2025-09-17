@@ -167,13 +167,13 @@ Don't change any key names or structure. You must return all keys shown above.
   Never being 0 and should being calculated as:
    * Primary detection method (preferred): Detect explicit agent "please wait" utterances in the transcript text (Arabic and English). For Arabic transcripts, detect common agent waiting phrases or words and variants such as (but not limited to):
      "لحظة", "لحظات", "انتظر", "استنى", "استنّي", "خلي حضرتك", "هنرجع لك بعد شوي", "اسيبك على الانتظار", "معايا لحظة", "خلي حضرتك معايا لحظة", "معاك لحظة", "من فضلك انتظر", "هاخد منك لحظة", and obvious morphological variants or common colloquial spellings.
-     When an agent utterance contains such a phrase or one word and indicates an intended hold, treat the hold start as that utterance's timestamp. Treat the hold end as the timestamp when the agent next resumes speaking (i.e., next agent utterance start time) or explicitly announces the end of hold. Compute hold duration as hold\_end\_timestamp - hold\_start\_timestamp in integer seconds.
+     When an agent utterance contains such a phrase or one word and indicates an intended hold, treat the hold start as that utterance's timestamp. Treat the hold end as the timestamp when the agent next resumes speaking (i.e., next agent utterance start time) or explicitly announces the end of hold. Compute hold duration as hold_end_timestamp - hold_start_timestamp in integer seconds.
      If the agent issues a "please wait" phrase and there is no later agent timestamp in the transcript to mark resumption, you must not output 0 for Hold time. Instead:
 
      * If a later customer utterance exists, conservatively treat the earlier of (a) the next customer utterance start time or (b) a minimum conservative default hold duration of 5 seconds after the "please wait" timestamp — whichever yields the larger hold duration — and document this choice in the "explanation" field.
      * If the transcript has no subsequent timestamps at all, estimate a conservative default hold duration of 5 seconds, and explain the assumption.
 * When the Agent says words such as "لحظات", "طيب لحظات", or "لحظة", you must detect and calculate the hold time until the Agent returns and resumes the conversation with the Customer. (Make sure to search across all Agent speech segments for these keywords.) so the hold time shouldn't never calculated as 0 
-   * If explicit markers are absent, infer hold from silence gaps between consecutive utterances where `gap >= 3 seconds` (gap = next\_utterance\_start − previous\_utterance\_end). Sum these inferred hold durations.
+   * If explicit markers are absent, infer hold from silence gaps between consecutive utterances where `gap >= 3 seconds` (gap = next_utterance_start − previous_utterance_end). Sum these inferred hold durations.
    * Output MUST be an integer number of seconds (never 0).
  * if you detects one second or more time hold you should write it in the json in the Hold time field that number of seconds and if you detect speaking time less than the total audio time so we have a hold time that was not calculated 
    * Prefer Arabic "please wait" detection and explicit markers over inferred silence. Always compute hold durations from timestamps and output as integer seconds (never 0). If exact timestamps are insufficient, estimate conservatively and explain assumptions concisely.
@@ -1019,13 +1019,13 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                         print(f"📈 Added {final_count - current_count} new document(s) to index")
                     elif final_count == current_count and current_count > 0:
                         print(f"🔄 Document updated in existing index (count unchanged: {final_count})")
-                                else:
+                    else:
                         print(f"ℹ️ Index document count: {final_count}")
-                        
+                    
                     # Verify specific document was indexed
                     if name_no_ext in indexed_doc_ids:
                         print(f"✅ Document {name_no_ext} confirmed in search index")
-                        else:
+                    else:
                         print(f"⚠️ Document {name_no_ext} may still be processing in background")
                     
                     print(f"Processing {filename}: Step 4 - Search indexing completed successfully")
