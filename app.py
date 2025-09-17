@@ -3,6 +3,7 @@ import json
 import os
 from datetime import datetime
 from services import azure_storage, azure_transcription, azure_oai, azure_search
+from transcription_revision_service import revision_service
 from flask import Flask, request, jsonify
 import json
 import requests
@@ -954,6 +955,14 @@ def upload_complete_pipeline() -> Dict[str, Any]:
             azure_storage.upload_transcription_to_blob(name_no_ext, transcript)
             print(f"Processing {filename}: Step 2 - Transcription completed successfully")
             
+            # Step 2.5: Generate revised transcriptions (Arabic and English) in background
+            print(f"Processing {filename}: Step 2.5 - Generating revised transcriptions...")
+            try:
+                # This will be done after analysis to have context
+                pass  # We'll do this after step 3 to have analysis context
+            except Exception as e:
+                print(f"Note: Revised transcription generation will be done after analysis: {e}")
+            
             # Step 3: Analyze transcript with GenAI using static system prompt
             print(f"Processing {filename}: Step 3 - Analyzing with GenAI...")
             analysis_raw = azure_oai.call_llm(SYSTEM_PROMPT_DEFAULT, transcript)
@@ -971,6 +980,27 @@ def upload_complete_pipeline() -> Dict[str, Any]:
                 prefix=azure_storage.LLM_ANALYSIS_FOLDER,
             )
             print(f"Processing {filename}: Step 3 - Analysis completed successfully")
+            
+            # Step 3.5: Generate revised transcriptions with analysis context
+            print(f"Processing {filename}: Step 3.5 - Generating revised transcriptions...")
+            try:
+                # Generate both Arabic and English revised transcriptions
+                arabic_success, english_success, revision_message = revision_service.process_single_transcription(
+                    name_no_ext, force_regenerate=False
+                )
+                
+                if arabic_success and english_success:
+                    print(f"✅ Both revised transcriptions created successfully for {filename}")
+                elif arabic_success:
+                    print(f"✅ Arabic revision created, English revision failed for {filename}")
+                elif english_success:
+                    print(f"✅ English revision created, Arabic revision failed for {filename}")
+                else:
+                    print(f"⚠️ Both revised transcriptions failed for {filename}: {revision_message}")
+                    
+            except Exception as e:
+                print(f"Warning: Error generating revised transcriptions for {filename}: {e}")
+                # Continue processing even if revision generation fails
             
             # Step 4: Update Azure AI Search index for chat functionality
             print(f"Processing {filename}: Step 4 - Indexing for search...")
@@ -1042,6 +1072,8 @@ def upload_complete_pipeline() -> Dict[str, Any]:
             results.append({
                 "file": filename,
                 "transcription_blob": f"{azure_storage.TRANSCRIPTION_FOLDER}/{name_no_ext}.txt",
+                "revised_arabic_blob": f"{azure_storage.REVISED_ARABIC_FOLDER}/{name_no_ext}.txt",
+                "revised_english_blob": f"{azure_storage.REVISED_ENGLISH_FOLDER}/{name_no_ext}.txt",
                 "analysis_blob": f"{azure_storage.LLM_ANALYSIS_FOLDER}/persona/{name_no_ext}.json",
                 "search_indexed": search_indexed,
                 "index_document_count": final_index_count,
@@ -2115,6 +2147,325 @@ def reindex_all_calls() -> Dict[str, Any]:
             "indexed_count": 0,
             "total_calls": 0
         }
+
+
+# ============================================================================
+# Transcription Revision Endpoints
+# ============================================================================
+
+@app.route('/create-revised-arabic-transcription', methods=['POST'])
+def create_revised_arabic_transcription():
+    """
+    Create enhanced, cleaned Arabic Egyptian conversation versions for specific call IDs.
+    
+    Expected JSON body:
+    {
+        "call_ids": ["call_001", "call_002"],  // Optional, if not provided processes all
+        "force_regenerate": false  // Optional, default false
+    }
+    """
+    try:
+        data = request.get_json() if request.is_json else {}
+        call_ids = data.get('call_ids', [])
+        force_regenerate = data.get('force_regenerate', False)
+        
+        if call_ids:
+            # Process specific call IDs
+            results = []
+            for call_id in call_ids:
+                print(f"Processing Arabic revision for call: {call_id}")
+                
+                # Read original transcription
+                original_transcription = azure_storage.read_transcription(f"{call_id}.txt")
+                if not original_transcription:
+                    results.append({
+                        "call_id": call_id,
+                        "status": "error",
+                        "message": f"Original transcription not found for {call_id}"
+                    })
+                    continue
+                
+                # Check if already exists
+                if not force_regenerate and azure_storage.revised_arabic_transcription_already_exists(call_id):
+                    results.append({
+                        "call_id": call_id,
+                        "status": "skipped",
+                        "message": f"Revised Arabic transcription already exists for {call_id}"
+                    })
+                    continue
+                
+                # Get call analysis for context
+                call_analysis = None
+                try:
+                    call_analysis = azure_storage.read_llm_analysis("persona", f"{call_id}.json")
+                except:
+                    pass
+                
+                # Create revised transcription
+                try:
+                    revised_arabic = revision_service.create_revised_arabic_transcription(
+                        original_transcription, call_analysis
+                    )
+                    
+                    # Save to blob storage
+                    azure_storage.upload_revised_arabic_transcription_to_blob(call_id, revised_arabic)
+                    
+                    results.append({
+                        "call_id": call_id,
+                        "status": "success",
+                        "message": f"Revised Arabic transcription created for {call_id}",
+                        "blob_path": f"{azure_storage.REVISED_ARABIC_FOLDER}/{call_id}.txt"
+                    })
+                    
+                except Exception as e:
+                    results.append({
+                        "call_id": call_id,
+                        "status": "error",
+                        "message": f"Error creating Arabic revision: {str(e)}"
+                    })
+            
+            return {
+                "status": "completed",
+                "processed": len(call_ids),
+                "results": results
+            }
+        
+        else:
+            # Process all transcriptions
+            print("Processing Arabic revisions for all transcriptions...")
+            batch_results = revision_service.process_all_transcriptions(force_regenerate)
+            
+            return {
+                "status": "completed",
+                "message": "Batch processing completed for Arabic revisions",
+                "total_processed": batch_results["processed"],
+                "arabic_successes": batch_results["arabic_success"],
+                "errors": len(batch_results["errors"]),
+                "error_details": batch_results["errors"][:10]  # Limit error details
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error processing Arabic revision request: {str(e)}"
+        }, 500
+
+
+@app.route('/create-revised-english-transcription', methods=['POST'])
+def create_revised_english_transcription():
+    """
+    Create cleaned English conversation versions for specific call IDs.
+    
+    Expected JSON body:
+    {
+        "call_ids": ["call_001", "call_002"],  // Optional, if not provided processes all
+        "force_regenerate": false  // Optional, default false
+    }
+    """
+    try:
+        data = request.get_json() if request.is_json else {}
+        call_ids = data.get('call_ids', [])
+        force_regenerate = data.get('force_regenerate', False)
+        
+        if call_ids:
+            # Process specific call IDs
+            results = []
+            for call_id in call_ids:
+                print(f"Processing English revision for call: {call_id}")
+                
+                # Read original transcription
+                original_transcription = azure_storage.read_transcription(f"{call_id}.txt")
+                if not original_transcription:
+                    results.append({
+                        "call_id": call_id,
+                        "status": "error",
+                        "message": f"Original transcription not found for {call_id}"
+                    })
+                    continue
+                
+                # Check if already exists
+                if not force_regenerate and azure_storage.revised_english_transcription_already_exists(call_id):
+                    results.append({
+                        "call_id": call_id,
+                        "status": "skipped",
+                        "message": f"Revised English transcription already exists for {call_id}"
+                    })
+                    continue
+                
+                # Get call analysis for context
+                call_analysis = None
+                try:
+                    call_analysis = azure_storage.read_llm_analysis("persona", f"{call_id}.json")
+                except:
+                    pass
+                
+                # Create revised transcription
+                try:
+                    revised_english = revision_service.create_revised_english_transcription(
+                        original_transcription, call_analysis
+                    )
+                    
+                    # Save to blob storage
+                    azure_storage.upload_revised_english_transcription_to_blob(call_id, revised_english)
+                    
+                    results.append({
+                        "call_id": call_id,
+                        "status": "success",
+                        "message": f"Revised English transcription created for {call_id}",
+                        "blob_path": f"{azure_storage.REVISED_ENGLISH_FOLDER}/{call_id}.txt"
+                    })
+                    
+                except Exception as e:
+                    results.append({
+                        "call_id": call_id,
+                        "status": "error",
+                        "message": f"Error creating English revision: {str(e)}"
+                    })
+            
+            return {
+                "status": "completed",
+                "processed": len(call_ids),
+                "results": results
+            }
+        
+        else:
+            # Process all transcriptions
+            print("Processing English revisions for all transcriptions...")
+            batch_results = revision_service.process_all_transcriptions(force_regenerate)
+            
+            return {
+                "status": "completed",
+                "message": "Batch processing completed for English revisions",
+                "total_processed": batch_results["processed"],
+                "english_successes": batch_results["english_success"],
+                "errors": len(batch_results["errors"]),
+                "error_details": batch_results["errors"][:10]  # Limit error details
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error processing English revision request: {str(e)}"
+        }, 500
+
+
+@app.route('/create-both-revised-transcriptions', methods=['POST'])
+def create_both_revised_transcriptions():
+    """
+    Create both Arabic and English revised transcriptions for specific call IDs or all calls.
+    
+    Expected JSON body:
+    {
+        "call_ids": ["call_001", "call_002"],  // Optional, if not provided processes all
+        "force_regenerate": false  // Optional, default false
+    }
+    """
+    try:
+        data = request.get_json() if request.is_json else {}
+        call_ids = data.get('call_ids', [])
+        force_regenerate = data.get('force_regenerate', False)
+        
+        if call_ids:
+            # Process specific call IDs
+            results = []
+            for call_id in call_ids:
+                print(f"Processing both revisions for call: {call_id}")
+                
+                arabic_success, english_success, message = revision_service.process_single_transcription(
+                    call_id, force_regenerate
+                )
+                
+                results.append({
+                    "call_id": call_id,
+                    "arabic_success": arabic_success,
+                    "english_success": english_success,
+                    "message": message,
+                    "status": "success" if arabic_success and english_success else "partial" if arabic_success or english_success else "error"
+                })
+            
+            return {
+                "status": "completed",
+                "processed": len(call_ids),
+                "results": results
+            }
+        
+        else:
+            # Process all transcriptions
+            print("Processing both Arabic and English revisions for all transcriptions...")
+            batch_results = revision_service.process_all_transcriptions(force_regenerate)
+            
+            return {
+                "status": batch_results["status"],
+                "message": batch_results["message"],
+                "total_processed": batch_results["processed"],
+                "arabic_successes": batch_results["arabic_success"],
+                "english_successes": batch_results["english_success"],
+                "errors": len(batch_results["errors"]),
+                "error_details": batch_results["errors"][:10]  # Limit error details
+            }
+            
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error processing revision request: {str(e)}"
+        }, 500
+
+
+@app.route('/get-revised-transcriptions/<call_id>', methods=['GET'])
+def get_revised_transcriptions(call_id: str):
+    """
+    Get all transcription versions (original, Arabic revised, English revised) for a specific call.
+    This endpoint is designed for the CallDetails page with three tabs.
+    """
+    try:
+        result = {
+            "call_id": call_id,
+            "transcriptions": {},
+            "available_tabs": []
+        }
+        
+        # Get original transcription
+        try:
+            original = azure_storage.read_transcription(f"{call_id}.txt")
+            if original:
+                result["transcriptions"]["original"] = original
+                result["available_tabs"].append("original")
+        except Exception as e:
+            print(f"Error reading original transcription: {e}")
+        
+        # Get revised Arabic transcription
+        try:
+            revised_arabic = azure_storage.read_revised_arabic_transcription(f"{call_id}.txt")
+            if revised_arabic:
+                result["transcriptions"]["revised_arabic"] = revised_arabic
+                result["available_tabs"].append("revised_arabic")
+        except Exception as e:
+            print(f"Error reading Arabic revision: {e}")
+        
+        # Get revised English transcription
+        try:
+            revised_english = azure_storage.read_revised_english_transcription(f"{call_id}.txt")
+            if revised_english:
+                result["transcriptions"]["revised_english"] = revised_english
+                result["available_tabs"].append("revised_english")
+        except Exception as e:
+            print(f"Error reading English revision: {e}")
+        
+        if not result["available_tabs"]:
+            return {
+                "status": "error",
+                "message": f"No transcriptions found for call {call_id}"
+            }, 404
+        
+        result["status"] = "success"
+        return result
+        
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error retrieving transcriptions: {str(e)}"
+        }, 500
+
 
 if __name__ == "__main__":
     app.run(debug=True)
