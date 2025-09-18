@@ -109,7 +109,8 @@ SYSTEM_PROMPT_DEFAULT = (
 
 ```json
 {
-  "name": "<customer full name in English string or null if not present>",
+  "customer_name": "<customer full name in English string not in Arabic or null if not present>",
+  "Agent_name":"<Agent full name in English string not in Arabic or null if not present>",
   "summary": "<one paragraph consisting of exactly four sentences>",
   "sentiment": {
     "score": <integer 1-5>,
