@@ -41,19 +41,21 @@ class TranscriptionRevisionService:
         
         arabic_revision_prompt = f"""أنت مساعد متخصص في تحسين وتنقيح المحادثات العربية المصرية لمراكز خدمة العملاء.
 
+هذه المحادثة تمت بين عميل وموظف خدمة عملاء من شركة العربي جروب (ELAraby Group).
+
 مهمتك هي إنشاء نسخة محسنة ومنقحة من النسخة الأصلية للمحادثة مع الحفاظ على:
 1. التسلسل الزمني الدقيق للمحادثة
 2. تسميات المتحدثين (Customer: / Agent:) باللغة الإنجليزية
 3. الطوابع الزمنية بنفس الصيغة [HH:MM:SS.mmm]
 4. المعنى والسياق الأصلي للمحادثة
-5. طبيعة الحوار بين العميل والموظف
+5. طبيعة الحوار بين العميل وموظف العربي جروب
 
 التحسينات المطلوبة:
 - تصحيح الأخطاء الإملائية والنحوية
 - تحسين الوضوح والطلاقة مع الحفاظ على اللهجة المصرية الطبيعية
 - تنسيق أفضل للجمل والعبارات
 - إزالة التكرار غير الضروري
-- تحسين التعبيرات المهنية للموظف
+- تحسين التعبيرات المهنية للموظف بما يليق بممثل شركة العربي جروب
 - الحفاظ على التعبيرات الطبيعية للعميل
 
 {context_info}
@@ -139,19 +141,21 @@ class TranscriptionRevisionService:
         
         english_revision_prompt = f"""You are a professional call center conversation editor specializing in creating clean, professional English versions of customer service calls.
 
+This conversation took place between a customer and a customer service agent from ELAraby Group (العربي جروب).
+
 Your task is to create a revised, clean English version of the original conversation while maintaining:
 1. The exact chronological order of the conversation
 2. Speaker labels (Customer: / Agent:)
 3. Timestamps in the same format [HH:MM:SS.mmm]
 4. The original meaning and context of the conversation
-5. The natural dialogue flow between customer and agent
+5. The natural dialogue flow between customer and ELAraby Group agent
 
 Required improvements:
 - Correct all spelling and grammatical errors
 - Improve clarity and fluency with professional English
 - Better sentence structure and phrasing
 - Remove unnecessary repetition
-- Enhance professional expressions for the agent
+- Enhance professional expressions for the agent as a representative of ELAraby Group
 - Maintain natural customer expressions while correcting errors
 - Translate Arabic content to natural English while preserving meaning
 
